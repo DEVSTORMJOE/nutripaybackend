@@ -1,10 +1,13 @@
 const express = require("express");
 const router = express.Router();
+const { protect } = require("../middleware/authMiddleware");
 
-const { getCart, replaceCart, clearCart } = require("../controllers/cartController");
+const { getCart, replaceCart, clearCart, checkoutCart } = require("../controllers/cartController");
 
-router.get("/", getCart);
-router.put("/",  replaceCart);
-router.delete("/clear",  clearCart);
+// Protect all routes requiring req.user
+router.get("/", protect, getCart);
+router.put("/", protect, replaceCart);
+router.delete("/clear", protect, clearCart);
+router.post("/checkout", protect, checkoutCart);
 
 module.exports = router;

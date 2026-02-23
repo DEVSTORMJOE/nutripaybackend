@@ -2,6 +2,7 @@ const MealPlan = require('../models/MealPlan');
 const Subscription = require('../models/Subscription');
 const Wallet = require('../models/Wallet');
 const Delivery = require('../models/Delivery');
+const stellarService = require('../services/stellarService');
 
 // @desc    Get vendor dashboard stats
 // @route   GET /api/vendor/dashboard
@@ -15,10 +16,28 @@ const getDashboard = async (req, res) => {
     });
     const wallet = await Wallet.findOne({ user: req.user.id });
 
+    let balance = wallet ? wallet.balance : 0;
+
+    // Fetch live balance from Stellar Network
+    try {
+      if (wallet && wallet.stellarPublicKey) {
+        const liveXlmBalance = await stellarService.getBalance(wallet.stellarPublicKey);
+        const liveKesBalance = stellarService.XLM_to_KES(liveXlmBalance);
+        
+        if (!isNaN(liveKesBalance) && parseFloat(liveKesBalance) >= 0) {
+            balance = parseFloat(liveKesBalance);
+            wallet.balance = balance;
+            await wallet.save();
+        }
+      }
+    } catch (stellarError) {
+      console.error("Failed to fetch live Stellar balance, falling back to MongoDB cache:", stellarError);
+    }
+
     res.json({
       activePlans: plans,
       activeSubscriptions: activeSubs,
-      balance: wallet ? wallet.balance : 0
+      balance
     });
   } catch (error) {
     console.error(error);

@@ -3,6 +3,7 @@ const Subscription = require('../models/Subscription');
 const Wallet = require('../models/Wallet');
 const User = require('../models/User');
 const Delivery = require('../models/Delivery');
+const stellarService = require('../services/stellarService');
 
 // @desc    Get student dashboard stats
 // @route   GET /api/student/dashboard
@@ -13,10 +14,23 @@ const getDashboard = async (req, res) => {
     const subscription = await Subscription.findOne({ student: studentId, status: 'active' }).populate('plan');
     const wallet = await Wallet.findOne({ user: studentId });
 
-    // In a real app, query Stellar for live balance or rely on synced balance
-    // For now, assume wallet.balance is kept in sync or query on demand
-    // Let's query on demand for accuracy if we had the service, but for now use DB
-    const balance = wallet ? wallet.balance : 0;
+    let balance = wallet ? wallet.balance : 0;
+
+    // Fetch live balance from Stellar Network
+    try {
+      if (wallet && wallet.stellarPublicKey) {
+        const liveXlmBalance = await stellarService.getBalance(wallet.stellarPublicKey);
+        const liveKesBalance = stellarService.XLM_to_KES(liveXlmBalance);
+        
+        if (!isNaN(liveKesBalance) && parseFloat(liveKesBalance) >= 0) {
+            balance = parseFloat(liveKesBalance);
+            wallet.balance = balance;
+            await wallet.save();
+        }
+      }
+    } catch (stellarError) {
+      console.error("Failed to fetch live Stellar balance, falling back to MongoDB cache:", stellarError);
+    }
 
     res.json({
       balance,

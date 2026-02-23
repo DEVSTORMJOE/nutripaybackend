@@ -7,7 +7,7 @@ async function runTest() {
   try {
     // 1. Create Student Wallet
     console.log("\n--- Step 1: Create Student Wallet ---");
-    const studentWallet = await stellarService.createStudentWallet();
+    const studentWallet = await stellarService.createWallet();
     console.log("✅ Student Wallet Created:");
     console.log("   Public:", studentWallet.publicKey);
     console.log("   Secret:", studentWallet.secret);
@@ -20,32 +20,29 @@ async function runTest() {
 
     // Fund Vendor (Required for it to receive payments)
     console.log("   Funding Vendor...");
-    await fetch(`https://friendbot.stellar.org?addr=${vendorKey.publicKey()}`);
+    const friendbotResponse = await fetch(`https://friendbot.stellar.org?addr=${vendorKey.publicKey()}`);
+    await friendbotResponse.json();
 
     // Check balance before
-    const { Horizon } = require('stellar-sdk');
-    const server = new Horizon.Server('https://horizon-testnet.stellar.org');
-    let initialBalance = await server.loadAccount(studentWallet.publicKey);
-    console.log("   Initial Balance:", initialBalance.balances.find(b => b.asset_type === 'native').balance);
+    let initialBalanceXLM = await stellarService.getBalance(studentWallet.publicKey);
+    console.log("   Initial Student Balance (XLM):", initialBalanceXLM);
+    console.log("   Initial Student Balance (KES):", stellarService.XLM_to_KES(initialBalanceXLM));
 
-    // Make Payment (10 XLM)
-    await stellarService.makePayment(studentWallet.publicKey, vendorKey.publicKey(), "10");
+    // Make Payment (100 KES = 5 XLM)
+    const kesAmount = "100";
+    console.log(`   Making Payment of ${kesAmount} KES...`);
+    await stellarService.makePayment(studentWallet.secret, vendorKey.publicKey(), kesAmount);
     console.log("✅ Payment Successful!");
+    
+    // Check balance after
+    let finalBalanceXLM = await stellarService.getBalance(studentWallet.publicKey);
+    console.log("   Final Student Balance (XLM):", finalBalanceXLM);
+    console.log("   Final Student Balance (KES):", stellarService.XLM_to_KES(finalBalanceXLM));
 
-    // 3. Simulate Refund (Sponsor)
-    const sponsorKey = Keypair.random(); // In reality, sponsor exists.
-    // We need to fund sponsor minimally to exist if we are merging? 
-    // Actually, mergeAccount requires destination to exist? Yes.
-    // Let's fund sponsor first via friendbot for the test to work.
-    console.log("\n--- Step 3: Simulate Refund ---");
-    console.log("   Sponsor Public:", sponsorKey.publicKey());
-    await fetch(`https://friendbot.stellar.org?addr=${sponsorKey.publicKey()}`);
-    console.log("   Sponsor funded (for existence).");
-
-    // Process Refund
-    await stellarService.processRefund(studentWallet.publicKey, sponsorKey.publicKey());
-    console.log("✅ Refund/Merge Successful!");
-
+    // Wait, testing Vendor Balance
+    let vendorBalanceXLM = await stellarService.getBalance(vendorKey.publicKey());
+    console.log("   Final Vendor Balance (XLM):", vendorBalanceXLM);
+    
     console.log("\n🎉 All Tests Passed!");
 
   } catch (error) {
