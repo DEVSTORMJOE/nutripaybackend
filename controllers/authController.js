@@ -1,0 +1,221 @@
+// const jwt = require('jsonwebtoken');
+// const bcrypt = require('bcryptjs');
+// const User = require('../models/User');
+// const Wallet = require('../models/Wallet');
+// const stellarService = require('../services/stellarService');
+
+// const generateToken = (id) => {
+//   return jwt.sign({ id }, process.env.JWT_SECRET, {
+//     expiresIn: '30d',
+//   });
+// };
+
+// // @desc    Register new user
+// // @route   POST /api/auth/register
+// // @access  Public
+// const registerUser = async (req, res) => {
+//   const { name, email, password, role } = req.body;
+
+//   if (!name || !email || !password || !role) {
+//     return res.status(400).json({ message: 'Please add all fields' });
+//   }
+
+//   // Check if user exists
+//   const userExists = await User.findOne({ email });
+
+//   if (userExists) {
+//     return res.status(400).json({ message: 'User already exists' });
+//   }
+
+//   // Create User
+//   const user = await User.create({
+//     name,
+//     email,
+//     password,
+//     role
+//   });
+
+//   if (user) {
+//     // Create Stellar Wallet for all roles
+//     try {
+//       const keypair = await stellarService.createWallet();
+
+//       await Wallet.create({
+//         user: user._id,
+//         stellarPublicKey: keypair.publicKey,
+//         stellarSecretKey: keypair.secret, // Custodial storage
+//         walletType: role
+//       });
+
+//       res.status(201).json({
+//         _id: user.id,
+//         name: user.name,
+//         email: user.email,
+//         role: user.role,
+//         token: generateToken(user._id),
+//       });
+//     } catch (error) {
+//       console.error("Wallet creation failed", error);
+//       // Rollback user
+//       await User.findByIdAndDelete(user._id);
+//       return res.status(500).json({ message: 'Failed to create wallet for user' });
+//     }
+//   } else {
+//     res.status(400).json({ message: 'Invalid user data' });
+//   }
+// };
+
+// // @desc    Authenticate a user
+// // @route   POST /api/auth/login
+// // @access  Public
+// const loginUser = async (req, res) => {
+//   const { email, password } = req.body;
+
+//   // Check for user email
+//   const user = await User.findOne({ email });
+
+//   if (user && (await user.matchPassword(password))) {
+//     const wallet = await Wallet.findOne({ user: user._id });
+
+//     res.json({
+//       _id: user.id,
+//       name: user.name,
+//       email: user.email,
+//       role: user.role,
+//       stellarPublicKey: wallet ? wallet.stellarPublicKey : null,
+//       token: generateToken(user._id)
+//     });
+//   } else {
+//     res.status(401).json({ message: 'Invalid credentials' });
+//   }
+// };
+
+// // @desc    Get user data
+// // @route   GET /api/auth/me
+// // @access  Private
+// const getMe = async (req, res) => {
+//   const user = await User.findById(req.user.id).populate('linkedAccounts');
+//   const wallet = await Wallet.findOne({ user: req.user.id });
+
+//   res.status(200).json({
+//     id: user.id,
+//     name: user.name,
+//     email: user.email,
+//     role: user.role,
+//     stellarPublicKey: wallet ? wallet.stellarPublicKey : null,
+//     balance: wallet ? wallet.balance : 0
+//   });
+// };
+
+// module.exports = {
+//   registerUser,
+//   loginUser,
+//   getMe,
+// };
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+// controllers/authController.js
+const jwt = require("jsonwebtoken");
+const User = require("../models/User");
+const admin = require("../config/firebaseAdmin");
+
+function signToken(userId) {
+  return jwt.sign({ id: userId }, process.env.JWT_SECRET, { expiresIn: "30d" });
+}
+
+async function register(req, res) {
+  try {
+    const { name, email, password, role } = req.body || {};
+    if (!name || !email || !password) return res.status(400).json({ message: "Missing fields" });
+
+    const exists = await User.findOne({ email });
+    if (exists) return res.status(409).json({ message: "Email already in use" });
+
+    const user = await User.create({
+      name,
+      email,
+      password,
+      role: role || "student",
+    });
+
+    const token = signToken(user._id);
+    const safeUser = await User.findById(user._id).select("-password");
+    return res.status(201).json({ token, user: safeUser });
+  } catch (e) {
+    return res.status(500).json({ message: "Signup failed" });
+  }
+}
+
+async function login(req, res) {
+  try {
+    const { email, password } = req.body || {};
+    if (!email || !password) return res.status(400).json({ message: "Missing fields" });
+
+    const user = await User.findOne({ email });
+    if (!user) return res.status(401).json({ message: "Invalid credentials" });
+
+    const ok = await user.matchPassword(password);
+    if (!ok) return res.status(401).json({ message: "Invalid credentials" });
+
+    const token = signToken(user._id);
+    const safeUser = await User.findById(user._id).select("-password");
+    return res.json({ token, user: safeUser });
+  } catch (e) {
+    return res.status(500).json({ message: "Login failed" });
+  }
+}
+
+async function firebaseAuth(req, res) {
+  try {
+    const { idToken, role } = req.body || {};
+    if (!idToken) return res.status(400).json({ message: "Missing idToken" });
+
+    const decoded = await admin.auth().verifyIdToken(idToken);
+    const firebaseUid = decoded.uid;
+    if (!firebaseUid) return res.status(401).json({ message: "Unauthorized" });
+
+    let user = await User.findOne({ firebaseUid });
+
+    // if not found, try email match
+    if (!user && decoded.email) {
+      user = await User.findOne({ email: decoded.email });
+      if (user && !user.firebaseUid) {
+        user.firebaseUid = firebaseUid;
+        if (!user.avatar && decoded.picture) user.avatar = decoded.picture;
+        if (!user.name && decoded.name) user.name = decoded.name;
+        await user.save();
+      }
+    }
+
+    if (!user) {
+      user = await User.create({
+        firebaseUid,
+        email: decoded.email || `${firebaseUid}@firebase.local`,
+        name: decoded.name || "User",
+        avatar: decoded.picture || "",
+        role: role || "student",
+      });
+    }
+
+    const token = signToken(user._id);
+    const safeUser = await User.findById(user._id).select("-password");
+    return res.json({ token, user: safeUser });
+  } catch (e) {
+    return res.status(401).json({ message: "Unauthorized" });
+  }
+}
+
+module.exports = { register, login, firebaseAuth };
