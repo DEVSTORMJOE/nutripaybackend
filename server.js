@@ -23,6 +23,7 @@ app.use('/api/wallet', require('./routes/walletRoutes'));
 app.use('/api/notifications', require('./routes/notificationRoutes'));
 app.use('/api/payment', require('./routes/paymentRoutes'));
 app.use('/api/admin', require('./routes/adminRoutes'));
+app.use('/api/mpesa', require('./routes/mpesaRoutes'));
 
 //TESTINONIAL ROUTES
 const testimonialsRoutes = require("./routes/testimonialsRoutes");
