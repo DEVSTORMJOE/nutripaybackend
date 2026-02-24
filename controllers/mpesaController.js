@@ -140,7 +140,24 @@ const mpesaCallback = async (req, res) => {
             });
         }
 
-        // 2. Mocking the XLM transfer by incrementing the test DB
+        // 2. Perform the actual XLM transfer from Platform Admin to the User's Wallet
+        if (stellarService.platformKey) {
+            console.log(`Executing real Stellar transfer from Platform to User ${userId} for ${amountPaid} KES`);
+            try {
+                await stellarService.makePayment(
+                    stellarService.platformKey.secret(),
+                    wallet.stellarPublicKey,
+                    amountPaid
+                );
+                console.log("Stellar payment successful. Network balance is now synchronized.");
+            } catch (err) {
+                console.error("Critical: Failed to sync M-Pesa deposit to Stellar network!", err);
+            }
+        } else {
+             console.warn("PLATFORM_SECRET_KEY missing. Skipping Stellar network synchronization.");
+        }
+
+        // Increment the local database for immediate UI update before the next network pull
         wallet.balance += Number(amountPaid);
         await wallet.save();
 

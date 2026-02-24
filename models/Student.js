@@ -26,9 +26,9 @@ const studentSchema = new mongoose.Schema({
     type: Boolean,
     default: false
   },
-  mealPlanId: {
+  mealId: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'MealPlan'
+    ref: 'Meal'
   },
   modificationCount: {
     type: Number,

@@ -1,7 +1,8 @@
 const User = require('../models/User');
-const MealPlan = require('../models/MealPlan');
+const Meal = require('../models/Meal');
 const Wallet = require('../models/Wallet');
 const Vendor = require('../models/Vendor');
+const Transaction = require('../models/Transaction');
 
 // @desc    Get system stats
 // @route   GET /api/admin/dashboard
@@ -9,14 +10,14 @@ const Vendor = require('../models/Vendor');
 const getDashboard = async (req, res) => {
   try {
     const users = await User.countDocuments();
-    const plans = await MealPlan.countDocuments();
+    const meals = await Meal.countDocuments();
     // Sum of all wallet balances locally tracked
     const wallets = await Wallet.find();
     const totalLiquidity = wallets.reduce((acc, w) => acc + w.balance, 0);
 
     res.json({
       totalUsers: users,
-      totalPlans: plans,
+      totalMeals: meals,
       networkLiquidity: totalLiquidity
     });
   } catch (error) {
@@ -25,20 +26,20 @@ const getDashboard = async (req, res) => {
   }
 };
 
-// @desc    Approve a meal plan
-// @route   POST /api/admin/approve/mealplan
+// @desc    Approve a meal
+// @route   POST /api/admin/approve/meal
 // @access  Private (Admin)
-const approveMealPlan = async (req, res) => {
-  const { planId, status } = req.body; // status: 'approved' or 'rejected'
+const approveMeal = async (req, res) => {
+  const { mealId, status } = req.body; // status: 'approved' or 'rejected'
 
   try {
-    const plan = await MealPlan.findById(planId);
-    if (!plan) return res.status(404).json({ message: 'Plan not found' });
+    const meal = await Meal.findById(mealId);
+    if (!meal) return res.status(404).json({ message: 'Meal not found' });
 
-    plan.approvalStatus = status;
-    await plan.save();
+    meal.approvalStatus = status;
+    await meal.save();
 
-    res.json({ message: `Plan ${status}` });
+    res.json({ message: `Meal ${status}` });
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: 'Server Error' });
@@ -77,15 +78,64 @@ const getUsers = async (req, res) => {
   }
 };
 
-// @desc    Get pending approvals (vendors and meal plans)
+// @desc    Get pending approvals (vendors and meals)
 // @route   GET /api/admin/pending
 // @access  Private (Admin)
 const getPendingApprovals = async (req, res) => {
   try {
     const pendingVendors = await Vendor.find({ approvedStatus: 'pending' }).populate('user', 'name email');
-    const pendingPlans = await MealPlan.find({ approvalStatus: 'pending' }).populate('vendor', 'name');
+    const pendingMeals = await Meal.find({ approvalStatus: 'pending' }).populate('vendor', 'name');
 
-    res.json({ vendors: pendingVendors, mealPlans: pendingPlans });
+    res.json({ vendors: pendingVendors, meals: pendingMeals });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Server Error' });
+  }
+};
+
+// @desc    Get all vendors (active, pending, rejected)
+// @route   GET /api/admin/vendors
+// @access  Private (Admin)
+const getVendors = async (req, res) => {
+  try {
+    const vendors = await Vendor.find().populate('user', 'name email');
+    res.json(vendors);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Server Error' });
+  }
+};
+
+// @desc    Get all wallets
+// @route   GET /api/admin/wallets
+// @access  Private (Admin)
+const getWallets = async (req, res) => {
+  try {
+    const wallets = await Wallet.find().populate('user', 'name email role');
+    res.json(wallets);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Server Error' });
+  }
+};
+
+// @desc    Get all transactions
+// @route   GET /api/admin/transactions
+// @access  Private (Admin)
+const getTransactions = async (req, res) => {
+  try {
+    const transactions = await Transaction.find()
+      .populate({
+        path: 'fromWallet',
+        populate: { path: 'user', select: 'name email role' }
+      })
+      .populate({
+        path: 'toWallet',
+        populate: { path: 'user', select: 'name email role' }
+      })
+      .sort({ createdAt: -1 });
+
+    res.json(transactions);
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: 'Server Error' });
@@ -94,8 +144,11 @@ const getPendingApprovals = async (req, res) => {
 
 module.exports = {
   getDashboard,
-  approveMealPlan,
+  approveMeal,
   getUsers,
   getPendingApprovals,
-  approveVendor
+  approveVendor,
+  getVendors,
+  getWallets,
+  getTransactions
 };

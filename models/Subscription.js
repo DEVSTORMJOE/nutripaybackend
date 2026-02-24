@@ -6,9 +6,9 @@ const subscriptionSchema = new mongoose.Schema({
     ref: 'User',
     required: true
   },
-  plan: {
+  meal: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'MealPlan',
+    ref: 'Meal',
     required: true
   },
   sponsor: {

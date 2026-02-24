@@ -27,13 +27,15 @@ const getWalletBalance = async (req, res) => {
       if (wallet.stellarPublicKey) {
         const liveXlmBalance = await stellarService.getBalance(wallet.stellarPublicKey);
         
-        // Convert live XLM balance to KES
-        const liveKesBalance = stellarService.XLM_to_KES(liveXlmBalance);
-        
-        // Only update if it is a valid positive number
-        if (!isNaN(liveKesBalance) && parseFloat(liveKesBalance) >= 0) {
-            wallet.balance = parseFloat(liveKesBalance);
-            await wallet.save();
+        if (liveXlmBalance !== null) {
+            // Convert live XLM balance to KES
+            const liveKesBalance = stellarService.XLM_to_KES(liveXlmBalance);
+            
+            // Only update if it is a valid positive number
+            if (!isNaN(liveKesBalance) && parseFloat(liveKesBalance) >= 0) {
+                wallet.balance = parseFloat(liveKesBalance);
+                await wallet.save();
+            }
         }
       }
     } catch (stellarError) {

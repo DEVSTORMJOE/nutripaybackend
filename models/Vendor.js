@@ -15,9 +15,9 @@ const vendorSchema = new mongoose.Schema({
     enum: ['pending', 'approved', 'rejected'],
     default: 'pending'
   },
-  mealPlans: [{
+  meals: [{
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'MealPlan'
+    ref: 'Meal'
   }]
 }, { timestamps: true });
 

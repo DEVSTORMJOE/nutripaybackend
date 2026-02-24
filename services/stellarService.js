@@ -97,7 +97,7 @@ async function makePayment(sourceSecret, destinationPublicKey, amountKES) {
         asset: Asset.native(),
         amount: xlmAmount
       }))
-      .setTimeout(30)
+      .setTimeout(0)
       .build();
 
     transaction.sign(sourceKey);
@@ -131,7 +131,7 @@ async function getBalance(publicKey) {
     } else {
       console.error("Error fetching balance:", error);
     }
-    return '0';
+    return null;
   }
 }
 

@@ -15,6 +15,11 @@ const NutritionSchema = new mongoose.Schema(
 
 const MealSchema = new mongoose.Schema(
   {
+    vendor: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Vendor',
+      required: true
+    },
     name: { type: String, required: true, trim: true },
     category: { type: String, required: true, enum: ["main", "drink", "fruit"] },
     description: { type: String, default: "" },
@@ -23,6 +28,11 @@ const MealSchema = new mongoose.Schema(
     currency: { type: String, default: "KES" },
     nutrition: { type: NutritionSchema, default: () => ({}) },
     isActive: { type: Boolean, default: true },
+    approvalStatus: {
+      type: String,
+      enum: ['pending', 'approved', 'rejected'],
+      default: 'pending'
+    }
   },
   { timestamps: true }
 );

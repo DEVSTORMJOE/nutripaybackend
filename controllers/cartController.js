@@ -1,7 +1,11 @@
 const Cart = require("../models/Cart");
 const Wallet = require("../models/Wallet");
-const Transaction = require("../models/Transaction");
 const stellarService = require("../services/stellarService");
+const User = require("../models/User");
+const Transaction = require("../models/Transaction");
+const Delivery = require("../models/Delivery");
+const crypto = require("crypto");
+const { sendMail } = require("../utils/mailer");
 
 async function getCart(req, res) {
   try {
@@ -106,50 +110,38 @@ async function checkoutCart(req, res) {
       return res.status(400).json({ message: "Insufficient balance for this checkout." });
     }
 
-    // 3. Find a Destination Wallet for the payment
-    // For MVP, look for the first vendor wallet, or auto-provision one if none exists so testnet transactions pass.
-    let vendorWallet = await Wallet.findOne({ walletType: 'vendor' });
+    // 3. Find the Escrow (Admin) Wallet for the payment
+    // We will look for an Admin wallet to hold funds in escrow.
+    let adminWallet = await Wallet.findOne({ walletType: 'admin' });
 
-    if (!vendorWallet) {
-        console.log(`Provisioning default Vendor wallet for testnet checkouts.`);
+    if (!adminWallet) {
+        console.log(`Provisioning default Admin escrow wallet for checkouts.`);
         
-        const User = require("../models/User");
-        let vendorUser = await User.findOne({ role: 'vendor' });
+        let adminUser = await User.findOne({ role: 'admin' });
         
-        if (!vendorUser) {
-            console.log("No vendor user found. Creating a mock vendor user to receive funds.");
-            vendorUser = await User.create({
-                name: "Mock Vendor",
-                email: "mockvendor@nutripay.local",
-                password: "hashedpassword123", // bypassing auth logic just for mock
-                role: "vendor"
+        if (!adminUser) {
+            console.log("No admin user found. Creating a mock admin user for escrow.");
+            adminUser = await User.create({
+                name: "Admin Escrow",
+                email: "admin@nutripay.local",
+                password: "hashedpassword123", // bypassing auth
+                role: "admin"
             });
         }
 
-        const vendorKeypair = await stellarService.createWallet();
+        const adminKeypair = await stellarService.createWallet();
         
-        vendorWallet = await Wallet.create({
-            user: vendorUser._id,
-            stellarPublicKey: vendorKeypair.publicKey,
-            stellarSecretKey: vendorKeypair.secret,
-            walletType: 'vendor',
+        adminWallet = await Wallet.create({
+            user: adminUser._id,
+            stellarPublicKey: adminKeypair.publicKey,
+            stellarSecretKey: adminKeypair.secret,
+            walletType: 'admin',
             balance: 0
         });
     }
 
-    let destinationPublicKey;
-    let destinationWalletId = null;
-
-    if (vendorWallet) {
-        destinationPublicKey = vendorWallet.stellarPublicKey;
-        destinationWalletId = vendorWallet._id;
-    } else {
-        // Ultimate Fallback: Platform Key
-        if (!stellarService.platformKey) {
-             return res.status(500).json({ message: "No destination platform vendors found for checkout." });
-        }
-        destinationPublicKey = stellarService.platformKey.publicKey();
-    }
+    let destinationPublicKey = adminWallet.stellarPublicKey;
+    let destinationWalletId = adminWallet._id;
 
     // 4. Call Stellar Service Make Payment (KES to XLM handles inside)
     const tx = await stellarService.makePayment(studentWallet.stellarSecretKey, destinationPublicKey, subtotalKes);
@@ -169,9 +161,48 @@ async function checkoutCart(req, res) {
     studentWallet.balance -= subtotalKes;
     await studentWallet.save();
 
-    if (vendorWallet) {
-        vendorWallet.balance += subtotalKes;
-        await vendorWallet.save();
+    adminWallet.balance += subtotalKes;
+    await adminWallet.save();
+
+    // 6.5. Create Deliveries for the scheduled days
+    // For MVP, we'll assign deliveries to the first available vendor
+    let vendorUser = await User.findOne({ role: 'vendor' });
+    const vendorId = vendorUser ? vendorUser._id : null;
+    
+    if (vendorId) {
+      const deliveriesToInsert = [];
+      for (const date of Object.keys(cart.schedule)) {
+        const day = cart.schedule[date];
+        if (!day) continue;
+        const qty = Math.max(1, Number(day.qty || 1));
+        const items = [];
+        if (day.main) items.push({ name: day.main.name, quantity: qty });
+        if (day.drink) items.push({ name: day.drink.name, quantity: qty });
+        if (day.fruit) items.push({ name: day.fruit.name, quantity: qty });
+
+        const dayTotalCost = (
+          (day.main ? Number(day.main.price) : 0) +
+          (day.drink ? Number(day.drink.price) : 0) +
+          (day.fruit ? Number(day.fruit.price) : 0)
+        ) * qty;
+
+        if (items.length > 0) {
+          deliveriesToInsert.push({
+            student: userId,
+            vendor: vendorId,
+            items: items,
+            status: 'pending',
+            totalCost: dayTotalCost,
+            timeSlot: day.timeSlot || 'Lunch',
+            scheduledDate: new Date(date),
+            location: 'Campus' // Default location for now
+          });
+        }
+      }
+      
+      if (deliveriesToInsert.length > 0) {
+        await Delivery.insertMany(deliveriesToInsert);
+      }
     }
 
     // 7. Clear Cart
@@ -184,4 +215,111 @@ async function checkoutCart(req, res) {
   }
 }
 
-module.exports = { getCart, replaceCart, clearCart, checkoutCart };
+async function addSponsorCheckout(req, res) {
+  try {
+    const userId = req.user.id;
+    const { sponsorName, sponsorPhone, sponsorEmail } = req.body;
+
+    if (!sponsorName || !sponsorEmail) {
+      return res.status(400).json({ message: "Sponsor name and email are required." });
+    }
+
+    const cart = await Cart.findOne({ user: userId }).lean();
+    if (!cart || !cart.schedule || Object.keys(cart.schedule).length === 0) {
+      return res.status(400).json({ message: "Cart is empty." });
+    }
+
+    let sponsor = await User.findOne({ email: sponsorEmail });
+    let isNewSponsor = false;
+    let generatedPassword = "";
+
+    if (!sponsor) {
+      isNewSponsor = true;
+      generatedPassword = crypto.randomBytes(4).toString("hex"); // e.g., 8 character random string
+
+      sponsor = await User.create({
+        name: sponsorName,
+        email: sponsorEmail,
+        password: generatedPassword, 
+        role: "sponsor",
+      });
+      // Optionally create a wallet for the sponsor here
+      const keypair = await stellarService.createWallet();
+      await Wallet.create({
+          user: sponsor._id,
+          stellarPublicKey: keypair.publicKey,
+          stellarSecretKey: keypair.secret,
+          walletType: "sponsor",
+          balance: 0
+      });
+    }
+
+    // Link sponsor to student and vice versa
+    await User.findByIdAndUpdate(sponsor._id, {
+      $addToSet: { linkedAccounts: userId }
+    });
+    await User.findByIdAndUpdate(userId, {
+      $addToSet: { linkedAccounts: sponsor._id }
+    });
+
+    // Subtotal calculation for email
+    let subtotalKes = 0;
+    for (const date of Object.keys(cart.schedule)) {
+      const day = cart.schedule[date];
+      if (!day) continue;
+      const qty = Math.max(1, Number(day.qty || 1));
+      const main = Number(day?.main?.price || 0);
+      const drink = Number(day?.drink?.price || 0);
+      const fruit = Number(day?.fruit?.price || 0);
+      subtotalKes += (main + drink + fruit) * qty;
+    }
+
+    let emailHtml = `
+      <div style="font-family: sans-serif; color: #333;">
+        <h2>NutriPay - Student Meal Request</h2>
+        <p>Hello ${sponsorName},</p>
+        <p>A student has requested you to sponsor their meals totaling <strong>${subtotalKes} KES</strong>.</p>
+    `;
+
+    if (isNewSponsor) {
+        emailHtml += `
+          <p>An account has been automatically created for you. Login with the following credentials to review and fund this request:</p>
+          <p><strong>Username / Email:</strong> ${sponsorEmail}</p>
+          <p><strong>One-Time Password:</strong> ${generatedPassword}</p>
+          <p><em>Please ensure you change your password immediately upon logging in for security purposes.</em></p>
+        `;
+    } else {
+        emailHtml += `
+          <p>Please log into your existing NutriPay Sponsor account to review and fund this request.</p>
+        `;
+    }
+
+    emailHtml += `</div>`;
+
+    try {
+      await sendMail({
+        to: sponsorEmail,
+        subject: "NutriPay - Student Meal Request",
+        html: emailHtml,
+      });
+      console.log(`[EMAIL SENT] To: ${sponsorEmail}`);
+    } catch (mailErr) {
+      console.error("Failed to send mail, proceeding anyway:", mailErr);
+    }
+
+    // Clear the cart since the responsibility has shifted to the Sponsor
+    // (In a fuller implementation, we might save this Cart as an 'Order/Request' linked to the Sponsor)
+    // For MVP, we will just inform the student it was sent and clear cart (or leave it in pending state).
+    await Cart.findOneAndUpdate({ user: userId }, { schedule: {} });
+
+    return res.json({ 
+      ok: true, 
+      message: `Request sent to ${sponsorName}. They have been emailed instructions.` 
+    });
+  } catch (err) {
+    console.error("Add Sponsor Checkout failed:", err);
+    return res.status(500).json({ message: "Failed to process sponsor checkout." });
+  }
+}
+
+module.exports = { getCart, replaceCart, clearCart, checkoutCart, addSponsorCheckout };

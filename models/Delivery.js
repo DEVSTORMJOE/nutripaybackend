@@ -21,8 +21,18 @@ const deliverySchema = new mongoose.Schema({
   }],
   status: {
     type: String,
-    enum: ['pending', 'assigned', 'picked_up', 'delivered', 'failed'],
+    enum: ['pending', 'assigned', 'picked_up', 'delivered', 'failed', 'cancelled'],
     default: 'pending'
+  },
+  totalCost: {
+    type: Number,
+    required: true,
+    default: 0
+  },
+  timeSlot: {
+    type: String,
+    enum: ['Breakfast', 'Lunch', 'Supper'],
+    default: 'Lunch'
   },
   scheduledDate: {
     type: Date,

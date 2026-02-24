@@ -20,6 +20,7 @@ const TemplateSchema = new mongoose.Schema(
     main: { type: MealSnapshotSchema, required: true },
     drink: { type: MealSnapshotSchema, required: true },
     fruit: { type: MealSnapshotSchema, required: true },
+    timeSlot: { type: String, enum: ["Breakfast", "Lunch", "Supper"], default: "Lunch" },
     createdAt: { type: Date, default: Date.now },
   },
   { _id: false }
@@ -32,6 +33,7 @@ const DayPlanSchema = new mongoose.Schema(
     main: { type: MealSnapshotSchema, required: true },
     drink: { type: MealSnapshotSchema, required: true },
     fruit: { type: MealSnapshotSchema, required: true },
+    timeSlot: { type: String, enum: ["Breakfast", "Lunch", "Supper"], default: "Lunch" },
     templateId: { type: String, default: "" },
     updatedAt: { type: Date, default: Date.now },
   },

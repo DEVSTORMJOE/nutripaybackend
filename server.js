@@ -17,7 +17,6 @@ app.use('/api/auth', require('./routes/authRoutes'));
 app.use('/api/student', require('./routes/studentRoutes'));
 app.use('/api/sponsor', require('./routes/sponsorRoutes'));
 app.use('/api/vendor', require('./routes/vendorRoutes'));
-app.use('/api/mealplans', require('./routes/mealPlanRoutes'));
 app.use('/api/delivery', require('./routes/deliveryRoutes'));
 app.use('/api/wallet', require('./routes/walletRoutes'));
 app.use('/api/notifications', require('./routes/notificationRoutes'));
