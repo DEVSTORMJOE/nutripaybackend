@@ -1,6 +1,7 @@
 const Transaction = require('../models/Transaction');
 const Delivery = require('../models/Delivery');
 const Wallet = require('../models/Wallet');
+const Vendor = require('../models/Vendor');
 
 // @desc    Get notifications for logged in user
 // @route   GET /api/notifications
@@ -31,8 +32,14 @@ const getNotifications = async (req, res) => {
       });
     }
 
-    // Recent delivery updates if student or delivery agent
-    const deliveries = await Delivery.find({ $or: [{ student: userId }, { deliveryAgent: userId }, { vendor: userId }] })
+    // Recent delivery updates if student, delivery agent or vendor
+    const vendorRecord = await Vendor.findOne({ user: userId });
+    const deliveriesQuery = [{ student: userId }, { deliveryAgent: userId }];
+    if (vendorRecord) {
+      deliveriesQuery.push({ vendor: vendorRecord._id });
+    }
+
+    const deliveries = await Delivery.find({ $or: deliveriesQuery })
       .sort({ scheduledDate: -1 })
       .limit(10);
 

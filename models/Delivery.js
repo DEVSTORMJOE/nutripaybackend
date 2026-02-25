@@ -8,7 +8,7 @@ const deliverySchema = new mongoose.Schema({
   },
   vendor: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'User',
+    ref: 'Vendor',
     required: true
   },
   deliveryAgent: {
@@ -21,7 +21,7 @@ const deliverySchema = new mongoose.Schema({
   }],
   status: {
     type: String,
-    enum: ['pending', 'assigned', 'picked_up', 'delivered', 'failed', 'cancelled'],
+    enum: ['pending', 'preparing', 'ready', 'assigned', 'picked_up', 'delivered', 'failed', 'cancelled'],
     default: 'pending'
   },
   totalCost: {

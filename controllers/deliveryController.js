@@ -6,8 +6,11 @@ const Delivery = require('../models/Delivery');
 const getAssignedDeliveries = async (req, res) => {
   try {
     const deliveries = await Delivery.find({ deliveryAgent: req.user.id, status: { $ne: 'delivered' } })
-      .populate('student', 'name address')
-      .populate('vendor', 'name address');
+      .populate('student', 'name email')
+      .populate({
+        path: 'vendor',
+        populate: { path: 'user', select: 'name email' }
+      });
     res.json(deliveries);
   } catch (error) {
     console.error(error);

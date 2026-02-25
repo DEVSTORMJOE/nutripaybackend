@@ -18,6 +18,10 @@ const vendorSchema = new mongoose.Schema({
   meals: [{
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Meal'
+  }],
+  deliveryStaff: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User'
   }]
 }, { timestamps: true });
 

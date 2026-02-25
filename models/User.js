@@ -88,6 +88,16 @@ const userSchema = new mongoose.Schema({
     required: true
   },
 
+  isApproved: {
+    type: Boolean,
+    default: true
+  },
+
+  requiresPasswordChange: {
+    type: Boolean,
+    default: false
+  },
+
   linkedAccounts: [{
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User'

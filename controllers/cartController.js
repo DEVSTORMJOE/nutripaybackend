@@ -4,6 +4,7 @@ const stellarService = require("../services/stellarService");
 const User = require("../models/User");
 const Transaction = require("../models/Transaction");
 const Delivery = require("../models/Delivery");
+const Meal = require("../models/Meal");
 const crypto = require("crypto");
 const { sendMail } = require("../utils/mailer");
 
@@ -164,45 +165,66 @@ async function checkoutCart(req, res) {
     adminWallet.balance += subtotalKes;
     await adminWallet.save();
 
-    // 6.5. Create Deliveries for the scheduled days
-    // For MVP, we'll assign deliveries to the first available vendor
-    let vendorUser = await User.findOne({ role: 'vendor' });
-    const vendorId = vendorUser ? vendorUser._id : null;
+    // 6.5. Create Deliveries for the scheduled days based on the actual Vendor of the meal
+    const mealIdsToFetch = new Set();
+    for (const date of Object.keys(cart.schedule)) {
+      const day = cart.schedule[date];
+      if (!day) continue;
+      if (day.main && day.main.mealId) mealIdsToFetch.add(day.main.mealId.toString());
+      if (day.drink && day.drink.mealId) mealIdsToFetch.add(day.drink.mealId.toString());
+      if (day.fruit && day.fruit.mealId) mealIdsToFetch.add(day.fruit.mealId.toString());
+    }
+
+    const fetchedMeals = await Meal.find({ _id: { $in: Array.from(mealIdsToFetch) } }).lean();
+    const mealVendorMap = {};
+    for (const m of fetchedMeals) {
+      if (m.vendor) {
+        mealVendorMap[m._id.toString()] = m.vendor.toString();
+      }
+    }
+
+    const deliveriesToInsert = [];
     
-    if (vendorId) {
-      const deliveriesToInsert = [];
-      for (const date of Object.keys(cart.schedule)) {
-        const day = cart.schedule[date];
-        if (!day) continue;
-        const qty = Math.max(1, Number(day.qty || 1));
-        const items = [];
-        if (day.main) items.push({ name: day.main.name, quantity: qty });
-        if (day.drink) items.push({ name: day.drink.name, quantity: qty });
-        if (day.fruit) items.push({ name: day.fruit.name, quantity: qty });
-
-        const dayTotalCost = (
-          (day.main ? Number(day.main.price) : 0) +
-          (day.drink ? Number(day.drink.price) : 0) +
-          (day.fruit ? Number(day.fruit.price) : 0)
-        ) * qty;
-
-        if (items.length > 0) {
-          deliveriesToInsert.push({
-            student: userId,
-            vendor: vendorId,
-            items: items,
-            status: 'pending',
-            totalCost: dayTotalCost,
-            timeSlot: day.timeSlot || 'Lunch',
-            scheduledDate: new Date(date),
-            location: 'Campus' // Default location for now
-          });
-        }
-      }
+    for (const date of Object.keys(cart.schedule)) {
+      const day = cart.schedule[date];
+      if (!day) continue;
       
-      if (deliveriesToInsert.length > 0) {
-        await Delivery.insertMany(deliveriesToInsert);
+      const qty = Math.max(1, Number(day.qty || 1));
+      
+      // We need to group items by vendor for this specific day
+      const vendorGroups = {};
+      
+      const processItem = (item) => {
+        if (!item || !item.mealId) return;
+        const vId = mealVendorMap[item.mealId.toString()];
+        if (!vId) return;
+        
+        if (!vendorGroups[vId]) vendorGroups[vId] = { items: [], totalCost: 0 };
+        
+        vendorGroups[vId].items.push({ name: item.name, quantity: qty });
+        vendorGroups[vId].totalCost += (Number(item.price) || 0) * qty;
+      };
+
+      processItem(day.main);
+      processItem(day.drink);
+      processItem(day.fruit);
+
+      for (const [vId, group] of Object.entries(vendorGroups)) {
+        deliveriesToInsert.push({
+          student: userId,
+          vendor: vId,
+          items: group.items,
+          status: 'pending',
+          totalCost: group.totalCost,
+          timeSlot: day.timeSlot || 'Lunch',
+          scheduledDate: new Date(date),
+          location: 'Campus' // Default location for now
+        });
       }
+    }
+    
+    if (deliveriesToInsert.length > 0) {
+      await Delivery.insertMany(deliveriesToInsert);
     }
 
     // 7. Clear Cart

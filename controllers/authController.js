@@ -130,6 +130,7 @@
 // controllers/authController.js
 const jwt = require("jsonwebtoken");
 const User = require("../models/User");
+const Vendor = require("../models/Vendor");
 const admin = require("../config/firebaseAdmin");
 
 function signToken(userId) {
@@ -167,12 +168,23 @@ async function login(req, res) {
     const user = await User.findOne({ email });
     if (!user) return res.status(401).json({ message: "Invalid credentials" });
 
+    if (!user.isApproved) {
+      return res.status(403).json({ message: "Account pending approval or suspended. Please contact administrator." });
+    }
+
+    if (user.role === "vendor") {
+      const vendorRecord = await Vendor.findOne({ user: user._id });
+      if (vendorRecord && (vendorRecord.approvedStatus === "pending" || vendorRecord.approvedStatus === "rejected")) {
+        return res.status(403).json({ message: `Vendor account is currently ${vendorRecord.approvedStatus}. Please contact administrator.` });
+      }
+    }
+
     const ok = await user.matchPassword(password);
     if (!ok) return res.status(401).json({ message: "Invalid credentials" });
 
     const token = signToken(user._id);
     const safeUser = await User.findById(user._id).select("-password");
-    return res.json({ token, user: safeUser });
+    return res.json({ token, user: safeUser, requiresPasswordChange: user.requiresPasswordChange });
   } catch (e) {
     return res.status(500).json({ message: "Login failed" });
   }
@@ -210,9 +222,20 @@ async function firebaseAuth(req, res) {
       });
     }
 
+    if (!user.isApproved) {
+      return res.status(403).json({ message: "Account pending approval or suspended. Please contact administrator." });
+    }
+
+    if (user.role === "vendor") {
+      const vendorRecord = await Vendor.findOne({ user: user._id });
+      if (vendorRecord && (vendorRecord.approvedStatus === "pending" || vendorRecord.approvedStatus === "rejected")) {
+        return res.status(403).json({ message: `Vendor account is currently ${vendorRecord.approvedStatus}. Please contact administrator.` });
+      }
+    }
+
     const token = signToken(user._id);
     const safeUser = await User.findById(user._id).select("-password");
-    return res.json({ token, user: safeUser });
+    return res.json({ token, user: safeUser, requiresPasswordChange: user.requiresPasswordChange });
   } catch (e) {
     return res.status(401).json({ message: "Unauthorized" });
   }

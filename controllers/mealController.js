@@ -33,7 +33,7 @@ const Meal = require("../models/Meal");
 async function listMeals(req, res) {
   try {
     const active = req.query.active;
-    const q = {};
+    const q = { approvalStatus: "approved" };
     if (active === "true") q.isActive = true;
 
     const items = await Meal.find(q).sort({ createdAt: -1 }).lean();

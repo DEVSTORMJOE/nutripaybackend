@@ -3,6 +3,8 @@ const Subscription = require('../models/Subscription');
 const Wallet = require('../models/Wallet');
 const Delivery = require('../models/Delivery');
 const Transaction = require('../models/Transaction');
+const Vendor = require('../models/Vendor');
+const User = require('../models/User');
 const stellarService = require('../services/stellarService');
 
 // @desc    Get vendor dashboard stats
@@ -10,9 +12,12 @@ const stellarService = require('../services/stellarService');
 // @access  Private (Vendor)
 const getDashboard = async (req, res) => {
   try {
-    const plans = await Meal.countDocuments({ vendor: req.user.id });
+    const vendorRecord = await Vendor.findOne({ user: req.user.id });
+    if (!vendorRecord) return res.status(404).json({ message: 'Vendor profile not found' });
+
+    const plans = await Meal.countDocuments({ vendor: vendorRecord._id });
     const activeSubs = await Subscription.countDocuments({
-      meal: { $in: await Meal.find({ vendor: req.user.id }).select('_id') },
+      meal: { $in: await Meal.find({ vendor: vendorRecord._id }).select('_id') },
       status: 'active'
     });
     const wallet = await Wallet.findOne({ user: req.user.id });
@@ -55,8 +60,11 @@ const createMeal = async (req, res) => {
   const { name, category, price, description, imageUrl, nutrition, currency } = req.body;
 
   try {
+    const vendorRecord = await Vendor.findOne({ user: req.user.id });
+    if (!vendorRecord) return res.status(404).json({ message: 'Vendor profile not found' });
+
     const meal = await Meal.create({
-      vendor: req.user.id,
+      vendor: vendorRecord._id,
       name,
       category,
       price,
@@ -78,7 +86,10 @@ const createMeal = async (req, res) => {
 // @access  Private (Vendor)
 const getMeals = async (req, res) => {
   try {
-    const meals = await Meal.find({ vendor: req.user.id });
+    const vendorRecord = await Vendor.findOne({ user: req.user.id });
+    if (!vendorRecord) return res.json([]);
+
+    const meals = await Meal.find({ vendor: vendorRecord._id });
     res.json(meals);
   } catch (error) {
     console.error(error);
@@ -91,9 +102,10 @@ const getMeals = async (req, res) => {
 // @access  Private (Vendor)
 const getOrders = async (req, res) => {
   try {
-    // Find deliveries related to verify subscriptions or direct orders
-    // For simplicity, let's assume 'Delivery' model tracks "orders" for the day
-    const deliveries = await Delivery.find({ vendor: req.user.id, status: { $ne: 'delivered' } })
+    const vendorRecord = await Vendor.findOne({ user: req.user.id });
+    if (!vendorRecord) return res.json([]);
+
+    const deliveries = await Delivery.find({ vendor: vendorRecord._id, status: { $ne: 'delivered' } })
       .populate('student', 'name email');
 
     res.json(deliveries);
@@ -109,9 +121,18 @@ const getOrders = async (req, res) => {
 const updateOrderStatus = async (req, res) => {
   try {
     const { id } = req.params;
-    const { status } = req.body;
-    const delivery = await Delivery.findOne({ _id: id, vendor: req.user.id });
+    const { status, deliveryAgent } = req.body;
+    
+    const vendorRecord = await Vendor.findOne({ user: req.user.id });
+    if (!vendorRecord) return res.status(404).json({ message: 'Vendor not found' });
+
+    const delivery = await Delivery.findOne({ _id: id, vendor: vendorRecord._id });
     if (!delivery) return res.status(404).json({ message: 'Order not found' });
+
+    // Track delivery agent if provided (e.g., when moving to assigned)
+    if (deliveryAgent) {
+      delivery.deliveryAgent = deliveryAgent;
+    }
 
     // Payment Logic: If marking as 'delivered' from a 'pending'/'assigned'/'picked_up' state
     if (status === 'delivered' && delivery.status !== 'delivered') {
@@ -163,10 +184,76 @@ const updateOrderStatus = async (req, res) => {
   }
 };
 
+// @desc    Get vendor's delivery staff
+// @route   GET /api/vendor/delivery-staff
+// @access  Private (Vendor)
+const getDeliveryStaff = async (req, res) => {
+  try {
+    const vendorRecord = await Vendor.findOne({ user: req.user.id }).populate('deliveryStaff', '-password');
+    if (!vendorRecord) return res.status(404).json({ message: 'Vendor not found' });
+    
+    // We map delivery staff into a structure that matches the frontend
+    const staff = vendorRecord.deliveryStaff.map(s => ({
+      _id: s._id,
+      name: s.name,
+      email: s.email,
+      phone: s.phone || "Not Provided",
+      status: "Available", // Hardcoded for now
+      deliveries: 0,
+      rating: 5.0
+    }));
+
+    res.json(staff);
+  } catch (error) {
+    console.error("Get Delivery Staff Error:", error);
+    res.status(500).json({ message: 'Server Error' });
+  }
+};
+
+// @desc    Register a new delivery staff
+// @route   POST /api/vendor/delivery-staff
+// @access  Private (Vendor)
+const registerDeliveryStaff = async (req, res) => {
+  try {
+    const { name, phone, idNumber } = req.body;
+    const vendorRecord = await Vendor.findOne({ user: req.user.id });
+    if (!vendorRecord) return res.status(404).json({ message: 'Vendor not found' });
+
+    // Ensure dummy email since we need unique emails for Users
+    const email = `driver_${idNumber || Date.now()}@nutripay.local`;
+
+    const newDriver = await User.create({
+      name,
+      email,
+      password: "password123", // Set a default password
+      role: 'delivery',
+      requiresPasswordChange: true
+    });
+
+    vendorRecord.deliveryStaff.push(newDriver._id);
+    await vendorRecord.save();
+
+    res.status(201).json({
+      _id: newDriver._id,
+      name: newDriver.name,
+      email: newDriver.email,
+      phone: phone,
+      status: "Available",
+      deliveries: 0,
+      rating: 5.0
+    });
+  } catch (error) {
+    console.error("Register Delivery Staff Error:", error);
+    res.status(500).json({ message: 'Server Error: ' + error.message });
+  }
+};
+
 module.exports = {
   getDashboard,
   createMeal,
   getMeals,
-  getOrders
-  ,updateOrderStatus
+  getOrders,
+  updateOrderStatus,
+  getDeliveryStaff,
+  registerDeliveryStaff
 };
