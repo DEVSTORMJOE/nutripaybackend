@@ -35,22 +35,24 @@ function XLM_to_KES(xlmAmount) {
  * Creates a restricted Student Wallet
  * Returns keys to be stored in Wallet model
  */
-async function createWallet() {
+async function createWallet(fundWithFriendbot = true) {
   try {
     const pair = Keypair.random();
 
-    console.log(`Requesting Friendbot funding for ${pair.publicKey()}`);
-    // In testnet, we can fund with friendbot
-    try {
-      const response = await fetch(`https://friendbot.stellar.org?addr=${pair.publicKey()}`);
-      if (!response.ok) {
-        throw new Error(`Friendbot failed with status ${response.status}`);
+    if (fundWithFriendbot) {
+      console.log(`Requesting Friendbot funding for ${pair.publicKey()}`);
+      // In testnet, we can fund with friendbot
+      try {
+        const response = await fetch(`https://friendbot.stellar.org?addr=${pair.publicKey()}`);
+        if (!response.ok) {
+          throw new Error(`Friendbot failed with status ${response.status}`);
+        }
+        await response.json(); // ensure it finishes
+        console.log(`Friendbot funding successful for ${pair.publicKey()}`);
+      } catch (e) {
+        console.error("Friendbot funding failed or timed out:", e);
+        // Do not throw, allow unfunded wallet creation
       }
-      await response.json(); // ensure it finishes
-      console.log(`Friendbot funding successful for ${pair.publicKey()}`);
-    } catch (e) {
-      console.error("Friendbot funding failed or timed out:", e);
-      throw new Error("Failed to fund new wallet on Stellar network.");
     }
 
     // Return the keys, the controller will handle DB storage

@@ -22,6 +22,12 @@ const vendorSchema = new mongoose.Schema({
   deliveryStaff: [{
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User'
+  }],
+  locations: [{
+    name: String,
+    address: String,
+    hours: String,
+    status: { type: String, enum: ['Open', 'Closed'], default: 'Open' }
   }]
 }, { timestamps: true });
 

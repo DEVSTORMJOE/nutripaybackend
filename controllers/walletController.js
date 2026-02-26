@@ -12,12 +12,14 @@ const getWalletBalance = async (req, res) => {
     // Auto-provision wallet if it doesn't exist
     if (!wallet) {
       console.log(`Provisioning missing Stellar wallet for user ${req.user.id} during balance check.`);
-      const keypair = await stellarService.createWallet();
+      const role = req.user.role || 'student';
+      const fund = !['vendor', 'delivery'].includes(role);
+      const keypair = await stellarService.createWallet(fund);
       wallet = await Wallet.create({
           user: req.user.id,
           stellarPublicKey: keypair.publicKey,
           stellarSecretKey: keypair.secret,
-          walletType: req.user.role || 'student',
+          walletType: role,
           balance: 0
       });
     }

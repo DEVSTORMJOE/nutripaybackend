@@ -11,6 +11,10 @@ const deliverySchema = new mongoose.Schema({
     ref: 'Vendor',
     required: true
   },
+  sponsor: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User'
+  },
   deliveryAgent: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User'
@@ -21,7 +25,7 @@ const deliverySchema = new mongoose.Schema({
   }],
   status: {
     type: String,
-    enum: ['pending', 'preparing', 'ready', 'assigned', 'picked_up', 'delivered', 'failed', 'cancelled'],
+    enum: ['awaiting_sponsor', 'pending', 'preparing', 'ready', 'assigned', 'picked_up', 'delivered', 'failed', 'cancelled'],
     default: 'pending'
   },
   totalCost: {

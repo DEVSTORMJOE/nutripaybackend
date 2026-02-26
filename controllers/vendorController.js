@@ -105,7 +105,7 @@ const getOrders = async (req, res) => {
     const vendorRecord = await Vendor.findOne({ user: req.user.id });
     if (!vendorRecord) return res.json([]);
 
-    const deliveries = await Delivery.find({ vendor: vendorRecord._id, status: { $ne: 'delivered' } })
+    const deliveries = await Delivery.find({ vendor: vendorRecord._id })
       .populate('student', 'name email');
 
     res.json(deliveries);
@@ -192,13 +192,21 @@ const getDeliveryStaff = async (req, res) => {
     const vendorRecord = await Vendor.findOne({ user: req.user.id }).populate('deliveryStaff', '-password');
     if (!vendorRecord) return res.status(404).json({ message: 'Vendor not found' });
     
+    // Check for active deliveries to determine assignment status
+    const activeDeliveries = await Delivery.find({
+      vendor: vendorRecord._id,
+      status: { $in: ['assigned', 'picked_up'] }
+    });
+
+    const assignedDriverIds = activeDeliveries.map(d => d.deliveryAgent?.toString()).filter(Boolean);
+
     // We map delivery staff into a structure that matches the frontend
     const staff = vendorRecord.deliveryStaff.map(s => ({
       _id: s._id,
       name: s.name,
       email: s.email,
       phone: s.phone || "Not Provided",
-      status: "Available", // Hardcoded for now
+      status: assignedDriverIds.includes(s._id.toString()) ? "Assigned" : "Available",
       deliveries: 0,
       rating: 5.0
     }));
@@ -215,17 +223,26 @@ const getDeliveryStaff = async (req, res) => {
 // @access  Private (Vendor)
 const registerDeliveryStaff = async (req, res) => {
   try {
-    const { name, phone, idNumber } = req.body;
+    const { name, email, password, phone, idNumber } = req.body;
     const vendorRecord = await Vendor.findOne({ user: req.user.id });
     if (!vendorRecord) return res.status(404).json({ message: 'Vendor not found' });
 
-    // Ensure dummy email since we need unique emails for Users
-    const email = `driver_${idNumber || Date.now()}@nutripay.local`;
+    // Validate we got an email and password
+    if (!email || !password) {
+      return res.status(400).json({ message: 'Email and password are required' });
+    }
+
+    // Check if user already exists
+    const existingUser = await User.findOne({ email });
+    if (existingUser) {
+      return res.status(400).json({ message: 'User with this email already exists' });
+    }
 
     const newDriver = await User.create({
       name,
       email,
-      password: "password123", // Set a default password
+      phone,
+      password, // User model will hash this on save
       role: 'delivery',
       requiresPasswordChange: true
     });
@@ -248,8 +265,57 @@ const registerDeliveryStaff = async (req, res) => {
   }
 };
 
+// @desc    Add a location
+// @route   POST /api/vendor/locations
+// @access  Private (Vendor)
+const addLocation = async (req, res) => {
+  try {
+    const { name, address, hours, status } = req.body;
+    const vendorRecord = await Vendor.findOne({ user: req.user.id });
+    if (!vendorRecord) return res.status(404).json({ message: 'Vendor not found' });
+
+    vendorRecord.locations.push({ name, address, hours, status });
+    await vendorRecord.save();
+    res.status(201).json(vendorRecord.locations);
+  } catch (error) {
+    res.status(500).json({ message: 'Server Error' });
+  }
+};
+
+// @desc    Get locations
+// @route   GET /api/vendor/locations
+// @access  Private (Vendor)
+const getLocations = async (req, res) => {
+  try {
+    const vendorRecord = await Vendor.findOne({ user: req.user.id });
+    if (!vendorRecord) return res.status(404).json({ message: 'Vendor not found' });
+    res.json(vendorRecord.locations || []);
+  } catch (error) {
+    res.status(500).json({ message: 'Server Error' });
+  }
+};
+
+// @desc    Delete location
+// @route   DELETE /api/vendor/locations/:locId
+// @access  Private (Vendor)
+const deleteLocation = async (req, res) => {
+  try {
+    const vendorRecord = await Vendor.findOne({ user: req.user.id });
+    if (!vendorRecord) return res.status(404).json({ message: 'Vendor not found' });
+    
+    vendorRecord.locations.id(req.params.locId).deleteOne();
+    await vendorRecord.save();
+    res.json(vendorRecord.locations);
+  } catch (error) {
+    res.status(500).json({ message: 'Server Error' });
+  }
+};
+
 module.exports = {
   getDashboard,
+  addLocation,
+  getLocations,
+  deleteLocation,
   createMeal,
   getMeals,
   getOrders,

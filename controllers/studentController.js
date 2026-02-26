@@ -24,9 +24,15 @@ const getDashboard = async (req, res) => {
     const todaysDeliveries = await Delivery.find({
       student: studentId,
       scheduledDate: { $gte: today, $lte: endOfDay },
-    }).sort({ scheduledDate: 1 });
+    }).sort({ scheduledDate: 1 }).lean();
 
-    const todaysDelivery = todaysDeliveries.length > 0 ? todaysDeliveries[0] : null;
+    let todaysDelivery = null;
+    if (todaysDeliveries.length > 0) {
+      todaysDelivery = {
+        ...todaysDeliveries[0],
+        items: todaysDeliveries.flatMap(d => d.items)
+      };
+    }
 
     const upcomingDeliveriesCount = await Delivery.countDocuments({
       student: studentId,
@@ -105,22 +111,132 @@ const selectMeal = async (req, res) => {
   }
 };
 
-// @desc    Opt out of meal
+// @desc    Opt out of meal subscription and refund pending deliveries
 // @route   POST /api/student/opt-out
 // @access  Private (Student)
 const optOut = async (req, res) => {
   try {
-    const subscription = await Subscription.findOne({ student: req.user.id, status: 'active' });
-    if (!subscription) return res.status(400).json({ message: 'No active subscription' });
+    const studentId = req.user.id;
+    const studentWallet = await Wallet.findOne({ user: studentId });
+    if (!studentWallet) return res.status(404).json({ message: 'Student wallet not found' });
+
+    // Freeze Wallet to prevent race conditions
+    studentWallet.status = 'refund_pending';
+    await studentWallet.save();
+
+    const subscription = await Subscription.findOne({ student: studentId, status: 'active' });
+    if (!subscription) {
+      // Unfreeze and return
+      studentWallet.status = 'active';
+      await studentWallet.save();
+      return res.status(400).json({ message: 'No active subscription' });
+    }
+
+    const pendingDeliveries = await Delivery.find({
+      student: studentId,
+      status: 'pending'
+    });
+
+    let totalRefundToSponsor = 0;
+    let sponsorId = null;
+    let totalRefundToStudent = 0;
+
+    pendingDeliveries.forEach(d => {
+      if (d.sponsor) {
+        totalRefundToSponsor += Number(d.totalCost || 0);
+        sponsorId = d.sponsor;
+      } else {
+        totalRefundToStudent += Number(d.totalCost || 0);
+      }
+    });
+
+    const validDeliveryIds = pendingDeliveries.map(d => d._id);
+
+    if (totalRefundToSponsor > 0 || totalRefundToStudent > 0) {
+      const adminWallet = await Wallet.findOne({ walletType: 'admin' }).select('+stellarSecretKey');
+      if (!adminWallet || !adminWallet.stellarSecretKey) {
+        studentWallet.status = 'active';
+        await studentWallet.save();
+        return res.status(500).json({ message: 'Escrow (Admin) wallet missing.' });
+      }
+
+      // Refund Sponsor
+      if (totalRefundToSponsor > 0 && sponsorId) {
+        const sponsorWallet = await Wallet.findOne({ user: sponsorId });
+        if (sponsorWallet) {
+          const tx1 = await stellarService.makePayment(adminWallet.stellarSecretKey, sponsorWallet.stellarPublicKey, totalRefundToSponsor);
+          
+          await Transaction.create({
+            fromWallet: adminWallet._id,
+            toWallet: sponsorWallet._id,
+            amount: totalRefundToSponsor,
+            type: 'refund',
+            stellarTxHash: tx1.hash,
+            description: `Refund for opted-out student deliveries`,
+            status: 'completed'
+          });
+
+          sponsorWallet.balance += totalRefundToSponsor;
+          await sponsorWallet.save();
+          adminWallet.balance -= totalRefundToSponsor;
+
+          // Notify Sponsor
+          const Notification = require('../models/Notification');
+          await Notification.create({
+            user: sponsorId,
+            type: 'system',
+            title: 'Sponsorship Refund',
+            message: `A sponsored student opted out. ${totalRefundToSponsor} KES was refunded to your wallet.`
+          });
+        }
+      }
+
+      // Refund Student
+      if (totalRefundToStudent > 0) {
+        const tx2 = await stellarService.makePayment(adminWallet.stellarSecretKey, studentWallet.stellarPublicKey, totalRefundToStudent);
+        
+        await Transaction.create({
+          fromWallet: adminWallet._id,
+          toWallet: studentWallet._id,
+          amount: totalRefundToStudent,
+          type: 'refund',
+          stellarTxHash: tx2.hash,
+          description: `Refund for opted-out deliveries`,
+          status: 'completed'
+        });
+
+        studentWallet.balance += totalRefundToStudent;
+        adminWallet.balance -= totalRefundToStudent;
+      }
+
+      await adminWallet.save();
+    }
 
     subscription.status = 'cancelled';
     subscription.endDate = Date.now();
     await subscription.save();
 
-    res.json({ message: 'Successfully opted out' });
+    if (validDeliveryIds.length > 0) {
+      await Delivery.updateMany({ _id: { $in: validDeliveryIds } }, { $set: { status: 'cancelled' } });
+    }
+
+    // Unfreeze Wallet
+    studentWallet.status = 'active';
+    await studentWallet.save();
+
+    res.json({ 
+      message: 'Successfully opted out of the meal plan. Refunds processed.', 
+      refundedToSponsor: totalRefundToSponsor, 
+      refundedToStudent: totalRefundToStudent 
+    });
+
   } catch (error) {
     console.error(error);
-    res.status(500).json({ message: 'Server Error' });
+    // Unfreeze as failsafe (could be error handler in real production env)
+    try {
+      if (req.user) await Wallet.updateOne({ user: req.user.id }, { $set: { status: 'active' } });
+    } catch(e) {}
+    res.status(500).json({ message: 'Server Error processing opt-out.' });
   }
 };
 
@@ -149,8 +265,14 @@ const cancelDeliveries = async (req, res) => {
 
   try {
     const studentId = req.user.id;
-    
-    // 1. Fetch the targeted deliveries
+    const studentWallet = await Wallet.findOne({ user: studentId });
+    if (!studentWallet) return res.status(404).json({ message: 'Student wallet not found' });
+
+    // Freeze Wallet
+    studentWallet.status = 'refund_pending';
+    await studentWallet.save();
+
+    // 1. Fetch the targeted pending deliveries
     const deliveries = await Delivery.find({
       _id: { $in: deliveryIds },
       student: studentId,
@@ -158,71 +280,116 @@ const cancelDeliveries = async (req, res) => {
     });
 
     if (deliveries.length === 0) {
+      studentWallet.status = 'active';
+      await studentWallet.save();
       return res.status(400).json({ message: 'No eligible pending deliveries found to cancel.' });
     }
 
-    // 2. Calculate Refund Total
-    let refundKes = 0;
+    // 2. Calculate Refund Total split by funder
+    let totalRefundToSponsor = 0;
+    let totalRefundToStudent = 0;
+    const sponsorMap = {}; // Maps sponsorId to amount, in case of multiple sponsors somehow
     const validDeliveryIds = [];
-    // Assume all deliveries go to the same vendor for this student's schedule
-    const vendorId = deliveries[0].vendor; 
 
     deliveries.forEach(d => {
-      refundKes += Number(d.totalCost || 0);
       validDeliveryIds.push(d._id);
+      if (d.sponsor) {
+        totalRefundToSponsor += Number(d.totalCost || 0);
+        const sIdStr = d.sponsor.toString();
+        if(!sponsorMap[sIdStr]) sponsorMap[sIdStr] = 0;
+        sponsorMap[sIdStr] += Number(d.totalCost || 0);
+      } else {
+        totalRefundToStudent += Number(d.totalCost || 0);
+      }
     });
 
-    if (refundKes <= 0) {
-      // Just cancel them, no money to refund
+    if (totalRefundToSponsor <= 0 && totalRefundToStudent <= 0) {
       await Delivery.updateMany({ _id: { $in: validDeliveryIds } }, { $set: { status: 'cancelled' } });
+      studentWallet.status = 'active';
+      await studentWallet.save();
       return res.json({ message: 'Deliveries cancelled. No refund required.', refunded: 0, count: validDeliveryIds.length });
     }
 
     // 3. Process Stellar Refund from Escrow (Admin)
-    const studentWallet = await Wallet.findOne({ user: studentId });
     const adminWallet = await Wallet.findOne({ walletType: 'admin' }).select('+stellarSecretKey');
 
-    if (!studentWallet || !adminWallet || !adminWallet.stellarSecretKey) {
-      return res.status(500).json({ message: 'Escrow (Admin) wallet information missing. Cannot process refund.' });
+    if (!adminWallet || !adminWallet.stellarSecretKey) {
+      studentWallet.status = 'active';
+      await studentWallet.save();
+      return res.status(500).json({ message: 'Escrow (Admin) wallet missing.' });
     }
 
-    // Transfer from Admin back to Student
-    const tx = await stellarService.makePayment(
-      adminWallet.stellarSecretKey, 
-      studentWallet.stellarPublicKey, 
-      refundKes
-    );
+    // Refund Sponsors
+    const Notification = require('../models/Notification');
+    for (const [sId, amount] of Object.entries(sponsorMap)) {
+      if (amount > 0) {
+        const sponsorWallet = await Wallet.findOne({ user: sId });
+        if (sponsorWallet) {
+          const tx1 = await stellarService.makePayment(adminWallet.stellarSecretKey, sponsorWallet.stellarPublicKey, amount);
+          
+          await Transaction.create({
+            fromWallet: adminWallet._id,
+            toWallet: sponsorWallet._id,
+            amount: amount,
+            type: 'refund',
+            stellarTxHash: tx1.hash,
+            description: `Refund for cancelled student deliveries`,
+            status: 'completed'
+          });
 
-    // 4. Log Transaction
-    await Transaction.create({
-      fromWallet: adminWallet._id,
-      toWallet: studentWallet._id,
-      amount: refundKes,
-      type: 'refund',
-      stellarTxHash: tx.hash,
-      description: `Refund for ${validDeliveryIds.length} cancelled deliveries`,
-      status: 'completed'
-    });
+          sponsorWallet.balance += amount;
+          await sponsorWallet.save();
+          adminWallet.balance -= amount;
 
-    // 5. Update local balances
-    studentWallet.balance += refundKes;
-    await studentWallet.save();
+          await Notification.create({
+            user: sId,
+            type: 'system',
+            title: 'Meal Cancellation Refund',
+            message: `A student cancelled a funded meal. ${amount} KES was refunded to your wallet.`
+          });
+        }
+      }
+    }
 
-    adminWallet.balance -= refundKes;
+    // Refund Student
+    if (totalRefundToStudent > 0) {
+      const tx2 = await stellarService.makePayment(adminWallet.stellarSecretKey, studentWallet.stellarPublicKey, totalRefundToStudent);
+      
+      await Transaction.create({
+        fromWallet: adminWallet._id,
+        toWallet: studentWallet._id,
+        amount: totalRefundToStudent,
+        type: 'refund',
+        stellarTxHash: tx2.hash,
+        description: `Refund for cancelled deliveries`,
+        status: 'completed'
+      });
+
+      studentWallet.balance += totalRefundToStudent;
+      adminWallet.balance -= totalRefundToStudent;
+    }
+
     await adminWallet.save();
 
     // 6. Update Delivery Statuses
     await Delivery.updateMany({ _id: { $in: validDeliveryIds } }, { $set: { status: 'cancelled' } });
 
+    // Unfreeze Wallet
+    studentWallet.status = 'active';
+    await studentWallet.save();
+
     res.json({ 
       message: `Successfully cancelled ${validDeliveryIds.length} deliveries.`, 
-      refunded: refundKes, 
-      newBalance: studentWallet.balance,
-      txHash: tx.hash 
+      refundedToSponsor: totalRefundToSponsor, 
+      refundedToStudent: totalRefundToStudent,
+      newBalance: studentWallet.balance
     });
 
   } catch (error) {
     console.error("Cancel Deliveries Error:", error);
+    try {
+      if (req.user) await Wallet.updateOne({ user: req.user.id }, { $set: { status: 'active' } });
+    } catch(e) {}
     res.status(500).json({ message: 'Failed to process cancellation and refund: ' + (error.message || 'Unknown network error') });
   }
 };

@@ -15,7 +15,7 @@ const transactionSchema = new mongoose.Schema({
   },
   type: {
     type: String,
-    enum: ['funding', 'payment', 'refund', 'payout'],
+    enum: ['funding', 'payment', 'refund', 'payout', 'withdrawal', 'deposit'],
     required: true
   },
   stellarTxHash: {

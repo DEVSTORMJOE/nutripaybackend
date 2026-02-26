@@ -22,6 +22,11 @@ const walletSchema = new mongoose.Schema({
     type: Number,
     default: 0
   },
+  status: {
+    type: String,
+    enum: ['active', 'refund_pending', 'frozen'],
+    default: 'active'
+  },
   walletType: {
     type: String,
     enum: ['student', 'sponsor', 'vendor', 'admin', 'delivery'],

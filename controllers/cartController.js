@@ -225,6 +225,28 @@ async function checkoutCart(req, res) {
     
     if (deliveriesToInsert.length > 0) {
       await Delivery.insertMany(deliveriesToInsert);
+
+      const Notification = require("../models/Notification");
+      const vendorTotals = {};
+      deliveriesToInsert.forEach(d => {
+        // Here d.vendor is the string ID of the Vendor document. We actually need Vendor.user!
+        // Wait, I mapped mealVendorMap to Vendor's _id or User's _id?
+        if(!vendorTotals[d.vendor]) vendorTotals[d.vendor] = 0;
+        vendorTotals[d.vendor] += d.totalCost;
+      });
+
+      // Need to find the users for these vendors
+      const Vendor = require("../models/Vendor");
+      const targetVendors = await Vendor.find({ _id: { $in: Object.keys(vendorTotals) } });
+      
+      for (const vDoc of targetVendors) {
+        await Notification.create({
+          user: vDoc.user,
+          type: 'order',
+          title: 'New Student Order',
+          message: `A student scheduled deliveries totaling ${vendorTotals[vDoc._id.toString()]} KES.`
+        });
+      }
     }
 
     // 7. Clear Cart
@@ -240,7 +262,9 @@ async function checkoutCart(req, res) {
 async function addSponsorCheckout(req, res) {
   try {
     const userId = req.user.id;
-    const { sponsorName, sponsorPhone, sponsorEmail } = req.body;
+    const sponsorName = req.body.sponsorName;
+    const sponsorPhone = req.body.sponsorPhone;
+    const sponsorEmail = req.body.sponsorEmail?.trim().toLowerCase();
 
     if (!sponsorName || !sponsorEmail) {
       return res.status(400).json({ message: "Sponsor name and email are required." });
@@ -265,14 +289,14 @@ async function addSponsorCheckout(req, res) {
         password: generatedPassword, 
         role: "sponsor",
       });
-      // Optionally create a wallet for the sponsor here
-      const keypair = await stellarService.createWallet();
+      // Create funded testnet wallet for the sponsor
+      const keypair = await stellarService.createWallet(true);
       await Wallet.create({
-          user: sponsor._id,
-          stellarPublicKey: keypair.publicKey,
-          stellarSecretKey: keypair.secret,
-          walletType: "sponsor",
-          balance: 0
+        user: sponsor._id,
+        stellarPublicKey: keypair.publicKey,
+        stellarSecretKey: keypair.secret,
+        walletType: "sponsor",
+        balance: 10000,
       });
     }
 
@@ -329,9 +353,62 @@ async function addSponsorCheckout(req, res) {
       console.error("Failed to send mail, proceeding anyway:", mailErr);
     }
 
-    // Clear the cart since the responsibility has shifted to the Sponsor
-    // (In a fuller implementation, we might save this Cart as an 'Order/Request' linked to the Sponsor)
-    // For MVP, we will just inform the student it was sent and clear cart (or leave it in pending state).
+    // Emitting the awaiting_sponsor deliveries for the Sponsor
+    const mealIdsToFetch = new Set();
+    for (const date of Object.keys(cart.schedule)) {
+      const day = cart.schedule[date];
+      if (!day) continue;
+      if (day.main && day.main.mealId) mealIdsToFetch.add(day.main.mealId.toString());
+      if (day.drink && day.drink.mealId) mealIdsToFetch.add(day.drink.mealId.toString());
+      if (day.fruit && day.fruit.mealId) mealIdsToFetch.add(day.fruit.mealId.toString());
+    }
+
+    const fetchedMeals = await Meal.find({ _id: { $in: Array.from(mealIdsToFetch) } }).lean();
+    const mealVendorMap = {};
+    for (const m of fetchedMeals) {
+      if (m.vendor) mealVendorMap[m._id.toString()] = m.vendor.toString();
+    }
+
+    const deliveriesToInsert = [];
+    
+    for (const date of Object.keys(cart.schedule)) {
+      const day = cart.schedule[date];
+      if (!day) continue;
+      const qty = Math.max(1, Number(day.qty || 1));
+      const vendorGroups = {};
+      
+      const processItem = (item) => {
+        if (!item || !item.mealId) return;
+        const vId = mealVendorMap[item.mealId.toString()];
+        if (!vId) return;
+        if (!vendorGroups[vId]) vendorGroups[vId] = { items: [], totalCost: 0 };
+        vendorGroups[vId].items.push({ name: item.name, quantity: qty });
+        vendorGroups[vId].totalCost += (Number(item.price) || 0) * qty;
+      };
+
+      processItem(day.main);
+      processItem(day.drink);
+      processItem(day.fruit);
+
+      for (const [vId, group] of Object.entries(vendorGroups)) {
+        deliveriesToInsert.push({
+          student: userId,
+          vendor: vId,
+          sponsor: sponsor._id, // LINK THE SPONSOR HERE
+          items: group.items,
+          status: 'awaiting_sponsor',
+          totalCost: group.totalCost,
+          timeSlot: day.timeSlot || 'Lunch',
+          scheduledDate: new Date(date),
+          location: 'Campus'
+        });
+      }
+    }
+    
+    if (deliveriesToInsert.length > 0) {
+      await Delivery.insertMany(deliveriesToInsert);
+    }
+
     await Cart.findOneAndUpdate({ user: userId }, { schedule: {} });
 
     return res.json({ 

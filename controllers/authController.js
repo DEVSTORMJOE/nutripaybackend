@@ -139,7 +139,8 @@ function signToken(userId) {
 
 async function register(req, res) {
   try {
-    const { name, email, password, role } = req.body || {};
+    const { name, password, role } = req.body || {};
+    const email = req.body?.email?.trim().toLowerCase();
     if (!name || !email || !password) return res.status(400).json({ message: "Missing fields" });
 
     const exists = await User.findOne({ email });
@@ -162,7 +163,8 @@ async function register(req, res) {
 
 async function login(req, res) {
   try {
-    const { email, password } = req.body || {};
+    const { password } = req.body || {};
+    const email = req.body?.email?.trim().toLowerCase();
     if (!email || !password) return res.status(400).json({ message: "Missing fields" });
 
     const user = await User.findOne({ email });
@@ -241,4 +243,25 @@ async function firebaseAuth(req, res) {
   }
 }
 
-module.exports = { register, login, firebaseAuth };
+async function changePassword(req, res) {
+  try {
+    const { userId, oldPassword, newPassword } = req.body;
+    if (!userId || !oldPassword || !newPassword) return res.status(400).json({ message: "Missing fields" });
+
+    const user = await User.findById(userId);
+    if (!user) return res.status(404).json({ message: "User not found" });
+
+    const ok = await user.matchPassword(oldPassword);
+    if (!ok) return res.status(401).json({ message: "Invalid old password" });
+
+    user.password = newPassword;
+    user.requiresPasswordChange = false;
+    await user.save();
+
+    return res.json({ message: "Password updated successfully" });
+  } catch (e) {
+    return res.status(500).json({ message: "Failed to change password" });
+  }
+}
+
+module.exports = { register, login, firebaseAuth, changePassword };

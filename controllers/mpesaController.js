@@ -195,4 +195,59 @@ const checkMpesaStatus = async (req, res) => {
     }
 }
 
-module.exports = { mpesaDeposit, mpesaCallback, checkMpesaStatus };
+// M-Pesa B2C Payout (Withdrawal)
+const mpesaWithdraw = async (req, res) => {
+    try {
+        const { phone, amountKes } = req.body;
+        const userId = req.user.id;
+
+        if (!phone || !amountKes || amountKes <= 0) {
+            return res.status(400).json({ message: "Valid Phone number (254...) and KES amount required" });
+        }
+
+        const wallet = await Wallet.findOne({ user: userId }).select('+stellarSecretKey');
+        if (!wallet || wallet.balance < amountKes) {
+            return res.status(400).json({ message: "Insufficient balance or missing wallet." });
+        }
+
+        const adminWallet = await Wallet.findOne({ walletType: 'admin' });
+        let txHash = null;
+
+        if (wallet.stellarSecretKey && adminWallet) {
+            try {
+                // ACTUAL STELLAR TRANSFER: The advantage here is the ledger is immutable.
+                // It proves the vendor actually gave up their NutriTokens back to the Escrow.
+                const tx = await stellarService.makePayment(wallet.stellarSecretKey, adminWallet.stellarPublicKey, amountKes);
+                txHash = tx.hash;
+                
+                // Track backend balances (Transfer to Escrow)
+                adminWallet.balance += Number(amountKes);
+                await adminWallet.save();
+            } catch (err) {
+                console.error("Failed to sync withdrawal back to Admin Escrow on Stellar:", err);
+                return res.status(500).json({ message: "Blockchain network error preventing withdrawal." });
+            }
+        }
+
+        // Deduct from local wallet
+        wallet.balance -= Number(amountKes);
+        await wallet.save();
+
+        await Transaction.create({
+            fromWallet: wallet._id,
+            toWallet: adminWallet ? adminWallet._id : null,
+            amount: amountKes,
+            type: 'withdrawal',
+            stellarTxHash: txHash,
+            description: `M-Pesa Payout to ${phone}`,
+            status: 'completed'
+        });
+
+        res.json({ message: `Successfully withdrew ${amountKes} KES to M-Pesa ${phone}.` });
+    } catch (e) {
+        console.error("M-Pesa Withdraw error:", e);
+        res.status(500).json({ message: "Internal server error during payout" });
+    }
+}
+
+module.exports = { mpesaDeposit, mpesaCallback, checkMpesaStatus, mpesaWithdraw };

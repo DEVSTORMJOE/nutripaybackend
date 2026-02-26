@@ -157,7 +157,7 @@ const getTransactions = async (req, res) => {
 // @access  Private (Admin)
 const createUser = async (req, res) => {
   try {
-    const { name, email, password, role, isApproved } = req.body;
+    const { name, email, phone, password, role, isApproved, vendorId } = req.body;
     
     const userExists = await User.findOne({ email });
     if (userExists) {
@@ -167,11 +167,23 @@ const createUser = async (req, res) => {
     const user = await User.create({
       name,
       email,
+      phone,
       password,
       role,
       isApproved: isApproved !== undefined ? isApproved : true,
       requiresPasswordChange: true
     });
+
+    if (role === 'delivery' && vendorId) {
+      const vendor = await Vendor.findById(vendorId);
+      if (vendor) {
+        // Prevent duplicates
+        if (!vendor.deliveryStaff.includes(user._id)) {
+          vendor.deliveryStaff.push(user._id);
+          await vendor.save();
+        }
+      }
+    }
 
     res.status(201).json({ message: 'User created successfully', user });
   } catch (error) {
@@ -235,7 +247,7 @@ const createVendor = async (req, res) => {
     });
 
     // 3. Create Stellar Wallet
-    const keypair = await stellarService.createWallet();
+    const keypair = await stellarService.createWallet(false);
     await Wallet.create({
       user: user._id,
       stellarPublicKey: keypair.publicKey,
@@ -342,6 +354,12 @@ const getDeliveryStaff = async (req, res) => {
     const Vendor = require('../models/Vendor');
     const allVendors = await Vendor.find().populate('user', 'name');
 
+    // Check for active deliveries to determine assignment status
+    const activeDeliveries = await Delivery.find({
+      status: { $in: ['assigned', 'picked_up'] }
+    });
+    const assignedDriverIds = activeDeliveries.map(d => d.deliveryAgent?.toString()).filter(Boolean);
+
     // Build a map of driver ID -> Vendor Name
     const driverVendorMap = {};
     for (const vendor of allVendors) {
@@ -357,7 +375,7 @@ const getDeliveryStaff = async (req, res) => {
       name: d.name,
       email: d.email,
       phone: d.phone || "Not Provided",
-      status: "Available",
+      status: assignedDriverIds.includes(d._id.toString()) ? "Assigned" : "Available",
       vendorName: driverVendorMap[d._id.toString()] || "No Vendor Assigned"
     }));
 
