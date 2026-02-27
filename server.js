@@ -23,6 +23,7 @@ app.use('/api/notifications', require('./routes/notificationRoutes'));
 app.use('/api/payment', require('./routes/paymentRoutes'));
 app.use('/api/admin', require('./routes/adminRoutes'));
 app.use('/api/mpesa', require('./routes/mpesaRoutes'));
+app.use('/api/payhero', require('./routes/payheroRoutes'));
 app.use('/api/testimonials', require('./routes/testimonialsRoutes'))
 
 //TESTINONIAL ROUTES
