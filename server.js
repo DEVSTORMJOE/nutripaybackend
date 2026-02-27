@@ -42,6 +42,12 @@ const cartRoutes = require("./routes/cartRoutes");
 app.use("/api/cart", cartRoutes);
 
 
+//SPONSORS ROUTE
+const Sponsors = require("./routes/Sponsors");
+app.use("/api/sponsors", Sponsors);
+
+
+
 // Basic route
 app.get('/', (req, res) => {
   res.send('NutriPay Backend Running');
