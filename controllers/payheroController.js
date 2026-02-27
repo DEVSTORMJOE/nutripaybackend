@@ -24,10 +24,9 @@ const payheroDeposit = async (req, res) => {
         // Generate a unique reference for this transaction
         const reference = crypto.randomUUID();
 
-        // The webhook URL should hit your live ngrok/server
-        const callbackUrl = process.env.DARAJA_CALLBACK_URL 
-            ? process.env.DARAJA_CALLBACK_URL.replace('/api/mpesa/callback', `/api/payhero/callback/${req.user.id}`)
-            : `https://nutripay.com/api/payhero/callback/${req.user.id}`;
+        // The webhook URL should hit the live server
+        const baseUrl = process.env.PAYHERO_CALLBACK_URL || 'https://nutripaybackend.onrender.com';
+        const callbackUrl = `${baseUrl}/api/payhero/callback/${req.user.id}`;
 
         const payload = {
             amount: Number(amountKes),
