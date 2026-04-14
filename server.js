@@ -42,6 +42,10 @@ app.use("/api/meals", mealRoutes);
 const cartRoutes = require("./routes/cartRoutes");
 app.use("/api/cart", cartRoutes);
 
+//WAITING LIST
+const waitingListRoutes = require("./routes/waitingListRoutes");
+app.use("/api/waitinglist", waitingListRoutes);
+
 
 // Basic route
 app.get('/', (req, res) => {
