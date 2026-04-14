@@ -16,6 +16,7 @@ app.use(express.json());
 app.use('/api/auth', require('./routes/authRoutes'));
 app.use('/api/student', require('./routes/studentRoutes'));
 app.use('/api/sponsor', require('./routes/sponsorRoutes'));
+app.use('/api/sponsors', require('./routes/publicSponsorRoutes'));
 app.use('/api/vendor', require('./routes/vendorRoutes'));
 app.use('/api/delivery', require('./routes/deliveryRoutes'));
 app.use('/api/wallet', require('./routes/walletRoutes'));
