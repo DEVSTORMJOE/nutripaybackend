@@ -1,0 +1,55 @@
+# DO NOT REMOVE. CLOUDLINUX PASSENGER CONFIGURATION BEGIN
+PassengerAppRoot "/home3/pakfashi/api.nutripay.co.ke"
+PassengerBaseURI "/"
+PassengerNodejs "/home3/pakfashi/nodevenv/api.nutripay.co.ke/18/bin/node"
+PassengerAppType node
+PassengerStartupFile server.js
+# DO NOT REMOVE. CLOUDLINUX PASSENGER CONFIGURATION END
+
+# --- 🚀 CUSTOM CORS & HEADER INJECTION BEGIN ---
+# This section forces LiteSpeed/Apache to allow CORS and pass Headers to Node.js
+# <IfModule mod_headers.c>
+#     Header set Access-Control-Allow-Origin "https://nutripay.co.ke"
+#     Header set Access-Control-Allow-Credentials "true"
+#     Header set Access-Control-Allow-Methods "GET, POST, PUT, DELETE, OPTIONS"
+#     Header set Access-Control-Allow-Headers "Content-Type, Authorization, X-Requested-With, Accept, Origin, Cache-Control, Pragma, Expires, Cookie"
+# </IfModule>
+
+# Ensure Authorization header is passed to Node.js (needed for Login/Auth)
+RewriteEngine On
+RewriteCond %{HTTP:Authorization} ^(.*)
+RewriteRule .* - [e=HTTP_AUTHORIZATION:%1]
+# --- 🚀 CUSTOM CORS & HEADER INJECTION END ---
+
+# DO NOT REMOVE OR MODIFY. CLOUDLINUX ENV VARS CONFIGURATION BEGIN
+<IfModule Litespeed>
+SetEnv NODE_OPTIONS "--no-node-snapshot"
+SetEnv API_PASSWORD EsBW63GJVoUDl7NMbtO1yniifdcHsjECgZtNXk9G
+SetEnv API_USERNAME q22sgA3skE4W2ZOBLSko
+SetEnv BASIC_AUTH_TOKEN Basic cTIyc2dBM3NrRTRXMlpPQkxTa286RXNCVzYzR0pWb1VEbDdOTWJ0TzF5bmlpZmRjSHNqRUNnWnROWGs5Rw==
+SetEnv CORS_ORIGIN https://nutripay.co.ke
+SetEnv DARAJA_CONSUMER_KEY WkhXJbYqjFgHArjwhOcpWUUOeV3DwliYv0RPbgErgWoHU6Oq
+SetEnv GMAIL_APP_PASSWORD mblvnlafsvdstrzh
+SetEnv GMAIL_USER nutripayorg@gmail.com
+SetEnv JWT_SECRET nutripaysecret123
+SetEnv MAILER_DEBUG true
+SetEnv MAILER_VERIFY_ON_BOOT false
+SetEnv MONGO_URI mongodb+srv://mainafrank400_db_user:aezVMZGn4TrxT4Ma@np.o1nytl6.mongodb.net/?appName=NP
+SetEnv NEWSLETTER_BRAND_NAME NutriPay
+SetEnv NEWSLETTER_BRAND_URL https://nutripay.co.ke
+SetEnv NEWSLETTER_UNSUBSCRIBE_SECRET CHANGE_THIS_TO_A_LONG_RANDOM_SECRET
+SetEnv NEWSLETTER_UNSUB_FRONTEND_URL https://nutripay.co.ke/unsubscribe
+SetEnv NODE_ENV development
+SetEnv PAYHERO_CHANNEL_ID 5648
+SetEnv PLATFORM_SECRET_KEY SASTFUOZYIELSE3QDXUTELYNWEICHT36OPHOUVOBZQBR6XR4A5PBTDBE
+SetEnv PORT 5000
+SetEnv PUBLIC_HOST https://api.nutripay.co.ke
+SetEnv RAPIDAPI_HOST chatgpt-42.p.rapidapi.com
+SetEnv RAPIDAPI_KEY cdef426427mshd53ab74d717a2dcp19df93jsn3a5334408f11
+SetEnv RAPIDAPI_URL https://chatgpt-42.p.rapidapi.com/gpt4o
+SetEnv SMTP_FROM NUTRIPAY<nutripayorg@gmail.com>
+SetEnv SMTP_TLS_REJECT_UNAUTHORIZED true
+SetEnv STELLAR_FRIENDBOT_URL https://friendbot.stellar.org
+SetEnv NEWSLETTER_BRAND_EMAIL nutripayorg@gmail.com
+</IfModule>
+# DO NOT REMOVE OR MODIFY. CLOUDLINUX ENV VARS CONFIGURATION END
