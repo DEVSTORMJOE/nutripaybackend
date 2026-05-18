@@ -14,8 +14,7 @@ const WaitingListSchema = new mongoose.Schema({
   },
   mealPlanPrice: {
     type: Number,
-    required: true,
-    min: [2000, 'Price must be at least 2000']
+    required: false,
   },
   status: {
     type: String,

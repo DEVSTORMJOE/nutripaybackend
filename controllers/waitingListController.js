@@ -6,13 +6,8 @@ exports.joinWaitingList = async (req, res) => {
   try {
     const { email, phone, mealPlanPrice } = req.body;
 
-    if (!email || !phone || !mealPlanPrice) {
+    if (!email || !phone) {
       return res.status(400).json({ message: 'All fields are required.' });
-    }
-
-    const priceNum = Number(mealPlanPrice);
-    if (!Number.isInteger(priceNum) || priceNum < 2000) {
-      return res.status(400).json({ message: 'Price must be a positive integer and at least 2000.' });
     }
 
     const existing = await WaitingList.findOne({
@@ -31,7 +26,7 @@ exports.joinWaitingList = async (req, res) => {
     const waitlistEntry = await WaitingList.create({
       email,
       phone,
-      mealPlanPrice: priceNum
+      mealPlanPrice: mealPlanPrice ? Number(mealPlanPrice) : undefined
     });
 
     // Send styled welcome email (Clean white theme)
@@ -49,7 +44,7 @@ exports.joinWaitingList = async (req, res) => {
           </p>
           <p style="font-size: 16px; line-height: 1.6; color: #475569;">
             Thank you for joining the official <strong>NutriPay</strong> waiting list. We are thrilled to have you early on our journey. 
-            By indicating your preferred meal plan budget of <strong style="color: #f81d1d;">Ksh ${priceNum}</strong>, you've helped us tailor the upcoming experience just for you.
+            You've helped us get one step closer to tailoring the upcoming experience just for you.
           </p>
           
           <div style="background-color: #fef2f2; border-left: 4px solid #f81d1d; padding: 20px; margin: 30px 0; border-radius: 4px;">
@@ -80,7 +75,7 @@ exports.joinWaitingList = async (req, res) => {
         to: email,
         subject: 'Welcome to the NutriPay Waiting List! 🚀',
         html: mailHtml,
-        text: `Hi there, Thank you for joining the NutriPay waiting list! We've noted your preferred meal plan budget of Ksh ${priceNum}. We'll notify you as soon as we launch!`
+        text: `Hi there, Thank you for joining the NutriPay waiting list! We'll notify you as soon as we launch!`
       });
     } catch (mailError) {
       console.error('Failed to send waitlist confirmation email:', mailError);
