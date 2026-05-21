@@ -159,6 +159,12 @@ const studentSchema = new mongoose.Schema(
       index: true,
     },
 
+    studentId: {
+      type: String,
+      unique: true,
+      sparse: true,
+    },
+
     deliveryLocation: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "DeliveryLocation",
@@ -248,6 +254,15 @@ const studentSchema = new mongoose.Schema(
   },
   { timestamps: true }
 );
+
+studentSchema.pre("save", function (next) {
+  if (!this.studentId) {
+    const year = new Date().getFullYear();
+    const randomNum = Math.floor(Math.random() * 9000) + 1000;
+    this.studentId = `ST-${year}-${randomNum}`;
+  }
+  next();
+});
 
 const Student = mongoose.models.Student || mongoose.model("Student", studentSchema);
 

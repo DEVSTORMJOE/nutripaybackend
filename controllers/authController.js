@@ -2705,11 +2705,13 @@ async function completeProfile(req, res) {
         });
       }
 
-      roleProfile = await Student.findOneAndUpdate(
-        { user: user._id },
-        { $set: studentPayload },
-        { new: true, upsert: true, setDefaultsOnInsert: true }
-      );
+      roleProfile = await Student.findOne({ user: user._id });
+      if (roleProfile) {
+        Object.assign(roleProfile, studentPayload);
+        await roleProfile.save();
+      } else {
+        roleProfile = await Student.create({ user: user._id, ...studentPayload });
+      }
     }
 
     if (role === "sponsor") {

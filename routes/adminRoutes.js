@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { getDashboard, approveMeal, getUsers, getPendingApprovals, approveVendor, getVendors, getWallets, getTransactions, createUser, updateUser, createVendor, getMeals, updateMealApproval, getOrders, getDeliveryStaff } = require('../controllers/adminController');
+const { getDashboard, approveMeal, getUsers, getPendingApprovals, approveVendor, getVendors, getWallets, getTransactions, createUser, updateUser, createVendor, getMeals, updateMealApproval, getOrders, getDeliveryStaff, approveDelivery } = require('../controllers/adminController');
 const { protect } = require('../middleware/authMiddleware');
 const { role } = require('../middleware/roleMiddleware');
 
@@ -19,5 +19,6 @@ router.get('/meals', protect, role('admin'), getMeals);
 router.patch('/meals/:id/approval', protect, role('admin'), updateMealApproval);
 router.get('/orders', protect, role('admin'), getOrders);
 router.get('/delivery-staff', protect, role('admin'), getDeliveryStaff);
+router.post('/approve/delivery', protect, role('admin'), approveDelivery);
 
 module.exports = router;

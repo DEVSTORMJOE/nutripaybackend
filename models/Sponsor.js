@@ -6,6 +6,16 @@ const sponsorSchema = new mongoose.Schema({
     ref: 'User',
     required: true
   },
+  organizationName: {
+    type: String,
+    trim: true,
+    default: "",
+  },
+  contactPhone: {
+    type: String,
+    trim: true,
+    default: "",
+  },
   stellarPublicKey: {
     type: String,
     // Optional if they just pay via external wallet, but good to have if we generate one

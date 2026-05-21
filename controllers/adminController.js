@@ -72,8 +72,21 @@ const approveVendor = async (req, res) => {
 // @access  Private (Admin)
 const getUsers = async (req, res) => {
   try {
-    const users = await User.find().select('-password');
-    res.json(users);
+    const users = await User.find().select('-password').lean();
+    
+    const Student = require('../models/Student');
+    const students = await Student.find().select('user studentId').lean();
+    const studentMap = students.reduce((acc, s) => {
+      acc[s.user.toString()] = s.studentId;
+      return acc;
+    }, {});
+
+    const mappedUsers = users.map(u => ({
+      ...u,
+      studentId: studentMap[u._id.toString()] || null
+    }));
+    
+    res.json(mappedUsers);
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: 'Server Error' });
@@ -207,7 +220,18 @@ const updateUser = async (req, res) => {
     if (name) user.name = name;
     if (email) user.email = email;
     if (role) user.role = role;
-    if (isApproved !== undefined) user.isApproved = isApproved;
+    
+    if (isApproved !== undefined) {
+      user.isApproved = isApproved;
+      
+      if (user.role === 'delivery') {
+        const DeliveryPersonnel = require('../models/DeliveryPersonnel');
+        await DeliveryPersonnel.findOneAndUpdate({ user: user._id }, { approvedStatus: isApproved ? 'approved' : 'rejected' });
+      } else if (user.role === 'vendor') {
+        const Vendor = require('../models/Vendor');
+        await Vendor.findOneAndUpdate({ user: user._id }, { approvedStatus: isApproved ? 'approved' : 'rejected' });
+      }
+    }
     
     if (password) {
       user.password = password;
@@ -370,12 +394,21 @@ const getDeliveryStaff = async (req, res) => {
       }
     }
 
+    // Fetch delivery personnel profiles
+    const DeliveryPersonnel = require('../models/DeliveryPersonnel');
+    const deliveryProfiles = await DeliveryPersonnel.find({ user: { $in: drivers.map(d => d._id) } }).lean();
+    const deliveryProfileMap = {};
+    for (const dp of deliveryProfiles) {
+      deliveryProfileMap[dp.user.toString()] = dp.approvedStatus;
+    }
+
     const mappedDrivers = drivers.map(d => ({
       _id: d._id,
       name: d.name,
       email: d.email,
       phone: d.phone || "Not Provided",
       status: assignedDriverIds.includes(d._id.toString()) ? "Assigned" : "Available",
+      approvedStatus: deliveryProfileMap[d._id.toString()] || (d.isApproved ? "approved" : "pending"),
       vendorName: driverVendorMap[d._id.toString()] || "No Vendor Assigned"
     }));
 
@@ -383,6 +416,39 @@ const getDeliveryStaff = async (req, res) => {
   } catch (error) {
     console.error("Admin getting delivery staff failed:", error);
     res.status(500).json({ message: 'Failed to fetch delivery staff' });
+  }
+};
+
+// @desc    Approve or reject delivery staff
+// @route   POST /api/admin/approve/delivery
+// @access  Private (Admin)
+const approveDelivery = async (req, res) => {
+  const { deliveryId, status } = req.body; // status: 'approved', 'rejected', 'pending'
+  try {
+    const DeliveryPersonnel = require('../models/DeliveryPersonnel');
+    const delivery = await DeliveryPersonnel.findOne({ user: deliveryId });
+    
+    if (!delivery) {
+      // If profile doesn't exist yet, we might need to create it
+      const newDelivery = await DeliveryPersonnel.create({
+        user: deliveryId,
+        approvedStatus: status
+      });
+      const User = require('../models/User');
+      await User.findByIdAndUpdate(deliveryId, { isApproved: status === 'approved' });
+      return res.json({ message: `Delivery staff ${status}`, delivery: newDelivery });
+    }
+
+    delivery.approvedStatus = status;
+    await delivery.save();
+
+    const User = require('../models/User');
+    await User.findByIdAndUpdate(deliveryId, { isApproved: status === 'approved' });
+
+    res.json({ message: `Delivery staff ${status}` });
+  } catch (error) {
+    console.error("Approve Delivery Error:", error);
+    res.status(500).json({ message: 'Server Error' });
   }
 };
 
@@ -395,11 +461,12 @@ module.exports = {
   createVendor,
   getMeals,
   updateMealApproval,
-  approveMeal, // Kept existing functions not explicitly removed
+  approveMeal,
   getPendingApprovals,
   approveVendor,
   getVendors,
   getWallets,
   getOrders,
   getDeliveryStaff,
+  approveDelivery,
 };

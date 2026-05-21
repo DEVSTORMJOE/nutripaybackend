@@ -165,6 +165,7 @@ app.use("/api/sponsors", require("./routes/Sponsors"));
 const DeliveryLocation = require("./routes/DeliveryLocation");
 app.use("/api/delivery-locations", DeliveryLocation);
 
+app.use("/api/profile", require("./routes/profileRoutes"));
 app.use("/api/nutri-ai", require("./routes/nutriAi.routes"));
 
 /* =========================

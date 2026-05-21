@@ -53,4 +53,110 @@ async function updateMyPhone(req, res) {
   }
 }
 
-module.exports = { updateMyPhone };
+const Vendor = require("../models/Vendor");
+const Sponsor = require("../models/Sponsor");
+const DeliveryPersonnel = require("../models/DeliveryPersonnel");
+const Student = require("../models/Student");
+
+// GET /api/profile
+async function getProfile(req, res) {
+  try {
+    const userId = req.user.id;
+    const role = req.user.role;
+    let profile = null;
+
+    if (role === 'student') {
+      profile = await Student.findOne({ user: userId }).populate('deliveryLocation');
+    } else if (role === 'vendor') {
+      profile = await Vendor.findOne({ user: userId });
+    } else if (role === 'sponsor') {
+      profile = await Sponsor.findOne({ user: userId });
+    } else if (role === 'delivery') {
+      profile = await DeliveryPersonnel.findOne({ user: userId });
+    }
+
+    return res.json({ profile, user: req.user });
+  } catch (err) {
+    return res.status(500).json({ message: "Server Error" });
+  }
+}
+
+// PUT /api/profile
+async function updateProfile(req, res) {
+  try {
+    const userId = req.user.id;
+    const role = req.user.role;
+    const updateData = req.body;
+
+    const userUpdates = {};
+    if (updateData.name !== undefined) userUpdates.name = updateData.name;
+    if (updateData.phone !== undefined) userUpdates.phone = normalizeKePhone(updateData.phone);
+    if (updateData.avatar !== undefined) userUpdates.avatar = updateData.avatar;
+
+    if (Object.keys(userUpdates).length > 0) {
+      await User.findByIdAndUpdate(userId, { $set: userUpdates });
+    }
+
+    if (role === "vendor") {
+      const vendorUpdates = {};
+      if (updateData.name !== undefined) vendorUpdates.businessName = updateData.name;
+      if (updateData.phone !== undefined) vendorUpdates.businessPhone = updateData.phone;
+      if (updateData.cuisine !== undefined) vendorUpdates.cuisine = updateData.cuisine;
+      
+      let updateOp = { $set: vendorUpdates };
+      
+      // Basic support for headquarters mapped to the first location
+      if (updateData.headquarters !== undefined) {
+        const vendor = await Vendor.findOne({ user: userId });
+        if (vendor) {
+          if (vendor.locations && vendor.locations.length > 0) {
+            vendor.locations[0].name = updateData.headquarters;
+            vendor.locations[0].address = updateData.headquarters;
+          } else {
+            vendor.locations = [{ name: updateData.headquarters, address: updateData.headquarters, status: "Open" }];
+          }
+          await vendor.save();
+        }
+      } else {
+        await Vendor.findOneAndUpdate({ user: userId }, updateOp);
+      }
+    } else if (role === "sponsor") {
+      const sponsorUpdates = {};
+      if (updateData.organizationName !== undefined) sponsorUpdates.organizationName = updateData.organizationName;
+      if (updateData.phone !== undefined) sponsorUpdates.contactPhone = updateData.phone;
+      await Sponsor.findOneAndUpdate({ user: userId }, { $set: sponsorUpdates });
+    } else if (role === "delivery") {
+      const deliveryUpdates = {};
+      if (updateData.serviceArea !== undefined) deliveryUpdates.serviceArea = updateData.serviceArea;
+      if (updateData.transportMode !== undefined) deliveryUpdates.transportMode = updateData.transportMode;
+      if (updateData.availability !== undefined) deliveryUpdates.availability = updateData.availability;
+      if (updateData.emergencyContact !== undefined) deliveryUpdates.emergencyContact = updateData.emergencyContact;
+      await DeliveryPersonnel.findOneAndUpdate({ user: userId }, { $set: deliveryUpdates });
+    } else if (role === "student") {
+      const studentUpdates = {};
+      const profileData = updateData.profile || updateData;
+      if (profileData.university !== undefined) studentUpdates.university = profileData.university;
+      if (profileData.campus !== undefined) studentUpdates.campus = profileData.campus;
+      if (profileData.hostel !== undefined) studentUpdates.hostel = profileData.hostel;
+      if (profileData.block !== undefined) studentUpdates.block = profileData.block;
+      if (profileData.room !== undefined) studentUpdates.room = profileData.room;
+      if (profileData.landmark !== undefined) studentUpdates.landmark = profileData.landmark;
+      if (profileData.deliveryLocation !== undefined) studentUpdates.deliveryLocation = profileData.deliveryLocation || null;
+      
+      let studentProfile = await Student.findOne({ user: userId });
+      if (studentProfile) {
+        Object.assign(studentProfile, studentUpdates);
+        await studentProfile.save();
+      } else {
+        await Student.create({ user: userId, ...studentUpdates });
+      }
+    }
+
+    return res.json({ message: "Profile updated successfully" });
+  } catch (err) {
+    console.error("updateProfile error:", err);
+    return res.status(500).json({ message: err.message || "Failed to update profile" });
+  }
+}
+
+module.exports = { updateMyPhone, updateProfile, getProfile };
