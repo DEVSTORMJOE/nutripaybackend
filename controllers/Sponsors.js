@@ -1,5 +1,5 @@
 // backend/controllers/sponsor.controller.js
-const Sponsor = require("../models/Sponsors");
+const Sponsor = require("../models/Sponsor");
 
 function normalize(body = {}) {
   return {

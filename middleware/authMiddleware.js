@@ -1,26 +1,71 @@
+
+
+// // middleware/authMiddleware.js
 // const jwt = require('jsonwebtoken');
 // const User = require('../models/User');
+// const admin = require('../config/firebaseAdmin');
 
 // const protect = async (req, res, next) => {
 //   let token;
 
-//   if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
-//     try {
-//       token = req.headers.authorization.split(' ')[1];
-
-//       const decoded = jwt.verify(token, process.env.JWT_SECRET);
-
-//       req.user = await User.findById(decoded.id).select('-password');
-
-//       next();
-//     } catch (error) {
-//       console.error(error);
-//       res.status(401).json({ message: 'Not authorized, token failed' });
-//     }
+//   const hdr = req.headers.authorization || "";
+//   if (hdr.startsWith('Bearer')) {
+//     token = hdr.split(' ')[1];
 //   }
 
 //   if (!token) {
-//     res.status(401).json({ message: 'Not authorized, no token' });
+//     return res.status(401).json({ message: 'Not authorized, no token' });
+//   }
+
+//   // 1) Try JWT (existing behavior)
+//   try {
+//     const decoded = jwt.verify(token, process.env.JWT_SECRET);
+//     req.user = await User.findById(decoded.id).select('-password');
+//     if (!req.user) return res.status(401).json({ message: 'Not authorized, user not found' });
+//     return next();
+//   } catch (error) {
+//     // fall through to Firebase
+//   }
+
+//   // 2) Try Firebase ID token
+//   try {
+//     const decodedFb = await admin.auth().verifyIdToken(token);
+//     const firebaseUid = decodedFb.uid;
+
+//     if (!firebaseUid) {
+//       return res.status(401).json({ message: 'Not authorized, token failed' });
+//     }
+
+//     let user = await User.findOne({ firebaseUid }).select('-password');
+
+//     // fallback lookup by email if present (optional)
+//     if (!user && decodedFb.email) {
+//       user = await User.findOne({ email: decodedFb.email }).select('-password');
+//       if (user && !user.firebaseUid) {
+//         user.firebaseUid = firebaseUid;
+//         if (!user.avatar && decodedFb.picture) user.avatar = decodedFb.picture;
+//         if (!user.name && decodedFb.name) user.name = decodedFb.name;
+//         await user.save();
+//       }
+//     }
+
+//     // create user if missing
+//     if (!user) {
+//       user = await User.create({
+//         firebaseUid,
+//         email: decodedFb.email || `${firebaseUid}@firebase.local`,
+//         name: decodedFb.name || "User",
+//         avatar: decodedFb.picture || "",
+//         role: "student",
+//       });
+//       user = await User.findById(user._id).select('-password');
+//     }
+
+//     req.user = user;
+//     return next();
+//   } catch (error) {
+//     console.error(error);
+//     return res.status(401).json({ message: 'Not authorized, token failed' });
 //   }
 // };
 
@@ -29,81 +74,113 @@
 
 
 
-
-
-
-
-
-
-
-
 // middleware/authMiddleware.js
-const jwt = require('jsonwebtoken');
-const User = require('../models/User');
-const admin = require('../config/firebaseAdmin');
+const jwt = require("jsonwebtoken");
+const User = require("../models/User");
+const admin = require("../config/firebaseAdmin");
 
 const protect = async (req, res, next) => {
-  let token;
+  let token = "";
 
-  const hdr = req.headers.authorization || "";
-  if (hdr.startsWith('Bearer')) {
-    token = hdr.split(' ')[1];
+  const authHeader = req.headers.authorization || "";
+
+  if (authHeader.startsWith("Bearer ")) {
+    token = authHeader.split(" ")[1];
+  }
+
+  if (!token && req.cookies?.token) {
+    token = req.cookies.token;
   }
 
   if (!token) {
-    return res.status(401).json({ message: 'Not authorized, no token' });
+    return res.status(401).json({
+      message: "Not authorized, no token",
+    });
   }
 
-  // 1) Try JWT (existing behavior)
+  // 1. Try app JWT first
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    req.user = await User.findById(decoded.id).select('-password');
-    if (!req.user) return res.status(401).json({ message: 'Not authorized, user not found' });
+
+    const userId = decoded.id || decoded._id || decoded.sub;
+
+    if (!userId) {
+      return res.status(401).json({
+        message: "Not authorized, invalid token payload",
+      });
+    }
+
+    const user = await User.findById(userId).select("-password");
+
+    if (!user) {
+      return res.status(401).json({
+        message: "Not authorized, user not found",
+      });
+    }
+
+    req.user = user;
     return next();
-  } catch (error) {
-    // fall through to Firebase
+  } catch (jwtError) {
+    // Continue and try Firebase token below.
   }
 
-  // 2) Try Firebase ID token
+  // 2. Try Firebase ID token
   try {
     const decodedFb = await admin.auth().verifyIdToken(token);
     const firebaseUid = decodedFb.uid;
 
     if (!firebaseUid) {
-      return res.status(401).json({ message: 'Not authorized, token failed' });
+      return res.status(401).json({
+        message: "Not authorized, Firebase token missing uid",
+      });
     }
 
-    let user = await User.findOne({ firebaseUid }).select('-password');
+    let user = await User.findOne({ firebaseUid }).select("-password");
 
-    // fallback lookup by email if present (optional)
     if (!user && decodedFb.email) {
-      user = await User.findOne({ email: decodedFb.email }).select('-password');
+      user = await User.findOne({
+        email: String(decodedFb.email).trim().toLowerCase(),
+      }).select("-password");
+
       if (user && !user.firebaseUid) {
         user.firebaseUid = firebaseUid;
-        if (!user.avatar && decodedFb.picture) user.avatar = decodedFb.picture;
-        if (!user.name && decodedFb.name) user.name = decodedFb.name;
+
+        if (!user.avatar && decodedFb.picture) {
+          user.avatar = decodedFb.picture;
+        }
+
+        if (!user.name && decodedFb.name) {
+          user.name = decodedFb.name;
+        }
+
         await user.save();
       }
     }
 
-    // create user if missing
     if (!user) {
-      user = await User.create({
-        firebaseUid,
-        email: decodedFb.email || `${firebaseUid}@firebase.local`,
-        name: decodedFb.name || "User",
-        avatar: decodedFb.picture || "",
-        role: "student",
+      return res.status(401).json({
+        message:
+          "Firebase user is authenticated, but no NutriPay account exists. Please sign up first.",
       });
-      user = await User.findById(user._id).select('-password');
     }
 
     req.user = user;
     return next();
-  } catch (error) {
-    console.error(error);
-    return res.status(401).json({ message: 'Not authorized, token failed' });
+  } catch (firebaseError) {
+    console.error("AUTH_MIDDLEWARE_ERROR:", {
+      name: firebaseError.name,
+      code: firebaseError.code,
+      message: firebaseError.message,
+    });
+
+    return res.status(401).json({
+      message: "Not authorized, token failed",
+    });
   }
 };
 
-module.exports = { protect };
+// Export both names so old and new route files both work
+module.exports = {
+  protect,
+  requireAuth: protect,
+};
