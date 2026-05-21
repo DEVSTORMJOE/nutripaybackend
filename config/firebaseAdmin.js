@@ -20,23 +20,26 @@ function loadServiceAccount() {
     : path.resolve(process.cwd(), serviceAccountPath);
 
   if (!fs.existsSync(absolutePath)) {
-    throw new Error(
-      `Firebase service account file not found at: ${absolutePath}`
-    );
+    console.warn(`Firebase service account file not found at: ${absolutePath}`);
+    console.warn("Firebase Auth will not work until this file is provided.");
+    return null;
   }
 
   const serviceAccount = require(absolutePath);
 
   if (!serviceAccount.project_id) {
-    throw new Error("Firebase service account is missing project_id.");
+    console.warn("Firebase service account is missing project_id.");
+    return null;
   }
 
   if (!serviceAccount.client_email) {
-    throw new Error("Firebase service account is missing client_email.");
+    console.warn("Firebase service account is missing client_email.");
+    return null;
   }
 
   if (!serviceAccount.private_key) {
-    throw new Error("Firebase service account is missing private_key.");
+    console.warn("Firebase service account is missing private_key.");
+    return null;
   }
 
   return serviceAccount;
@@ -45,15 +48,25 @@ function loadServiceAccount() {
 if (!admin.apps.length) {
   const serviceAccount = loadServiceAccount();
 
-  admin.initializeApp({
-    credential: admin.credential.cert(serviceAccount),
-    projectId: serviceAccount.project_id,
-  });
+  if (serviceAccount) {
+    admin.initializeApp({
+      credential: admin.credential.cert(serviceAccount),
+      projectId: serviceAccount.project_id,
+    });
 
-  console.log("Firebase Admin initialized:", {
-    projectId: serviceAccount.project_id,
-    clientEmail: serviceAccount.client_email,
-  });
+    console.log("Firebase Admin initialized:", {
+      projectId: serviceAccount.project_id,
+      clientEmail: serviceAccount.client_email,
+    });
+  } else {
+    console.warn("Firebase Admin was not initialized due to missing credentials.");
+    // Provide a mock auth function to avoid crashing when it is destructured
+    admin.auth = () => ({
+      verifyIdToken: async () => {
+        throw new Error("Firebase Admin not initialized.");
+      }
+    });
+  }
 }
 
 module.exports = admin;
