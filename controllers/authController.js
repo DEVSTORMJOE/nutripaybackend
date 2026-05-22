@@ -2065,8 +2065,7 @@ function profileIsComplete(role, profile, user = null) {
   if (role === "sponsor") {
     return (
       isFilled(user?.phone || profile.contactPhone) &&
-      isFilled(profile.organizationName) &&
-      isFilled(profile.contactPerson)
+      isFilled(profile.organizationName)
     );
   }
 
@@ -2110,7 +2109,9 @@ function buildNavigation(user, profile) {
   ) {
     nextStep = "pending_approval";
   } else if (!profileComplete) {
-    nextStep = "complete_profile";
+    if (role === "student" || role === "sponsor") {
+      nextStep = "complete_profile";
+    }
   }
 
   return {

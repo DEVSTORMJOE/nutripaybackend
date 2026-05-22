@@ -103,35 +103,45 @@ async function updateProfile(req, res) {
       if (updateData.phone !== undefined) vendorUpdates.businessPhone = updateData.phone;
       if (updateData.cuisine !== undefined) vendorUpdates.cuisine = updateData.cuisine;
       
-      let updateOp = { $set: vendorUpdates };
-      
-      // Basic support for headquarters mapped to the first location
-      if (updateData.headquarters !== undefined) {
-        const vendor = await Vendor.findOne({ user: userId });
-        if (vendor) {
+      const vendor = await Vendor.findOne({ user: userId });
+      if (vendor) {
+        Object.assign(vendor, vendorUpdates);
+        if (updateData.headquarters !== undefined) {
           if (vendor.locations && vendor.locations.length > 0) {
             vendor.locations[0].name = updateData.headquarters;
             vendor.locations[0].address = updateData.headquarters;
           } else {
             vendor.locations = [{ name: updateData.headquarters, address: updateData.headquarters, status: "Open" }];
           }
-          await vendor.save();
         }
+        await vendor.save();
       } else {
-        await Vendor.findOneAndUpdate({ user: userId }, updateOp);
+        const newVendorData = { user: userId, ...vendorUpdates };
+        if (updateData.headquarters !== undefined) {
+          newVendorData.locations = [{ name: updateData.headquarters, address: updateData.headquarters, status: "Open" }];
+        }
+        await Vendor.create(newVendorData);
       }
     } else if (role === "sponsor") {
       const sponsorUpdates = {};
       if (updateData.organizationName !== undefined) sponsorUpdates.organizationName = updateData.organizationName;
       if (updateData.phone !== undefined) sponsorUpdates.contactPhone = updateData.phone;
-      await Sponsor.findOneAndUpdate({ user: userId }, { $set: sponsorUpdates });
+      await Sponsor.findOneAndUpdate(
+        { user: userId },
+        { $set: sponsorUpdates },
+        { new: true, upsert: true }
+      );
     } else if (role === "delivery") {
       const deliveryUpdates = {};
       if (updateData.serviceArea !== undefined) deliveryUpdates.serviceArea = updateData.serviceArea;
       if (updateData.transportMode !== undefined) deliveryUpdates.transportMode = updateData.transportMode;
       if (updateData.availability !== undefined) deliveryUpdates.availability = updateData.availability;
       if (updateData.emergencyContact !== undefined) deliveryUpdates.emergencyContact = updateData.emergencyContact;
-      await DeliveryPersonnel.findOneAndUpdate({ user: userId }, { $set: deliveryUpdates });
+      await DeliveryPersonnel.findOneAndUpdate(
+        { user: userId },
+        { $set: deliveryUpdates },
+        { new: true, upsert: true }
+      );
     } else if (role === "student") {
       const studentUpdates = {};
       const profileData = updateData.profile || updateData;

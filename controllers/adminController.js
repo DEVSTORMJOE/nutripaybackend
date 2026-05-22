@@ -54,11 +54,15 @@ const approveMeal = async (req, res) => {
 const approveVendor = async (req, res) => {
   const { vendorId, status } = req.body; // status: 'approved' or 'rejected'
   try {
-    const vendor = await Vendor.findById(vendorId).populate('user');
+    const vendor = await Vendor.findById(vendorId);
     if (!vendor) return res.status(404).json({ message: 'Vendor not found' });
 
     vendor.approvedStatus = status;
     await vendor.save();
+
+    if (vendor.user) {
+      await User.findByIdAndUpdate(vendor.user, { isApproved: status === 'approved' });
+    }
 
     res.json({ message: `Vendor ${status}` });
   } catch (error) {
@@ -81,10 +85,36 @@ const getUsers = async (req, res) => {
       return acc;
     }, {});
 
-    const mappedUsers = users.map(u => ({
-      ...u,
-      studentId: studentMap[u._id.toString()] || null
-    }));
+    const DeliveryPersonnel = require('../models/DeliveryPersonnel');
+    const [vendors, deliveryStaff] = await Promise.all([
+      Vendor.find().select('user approvedStatus').lean(),
+      DeliveryPersonnel.find().select('user approvedStatus').lean()
+    ]);
+
+    const vendorMap = vendors.reduce((acc, v) => {
+      if (v.user) acc[v.user.toString()] = v.approvedStatus;
+      return acc;
+    }, {});
+
+    const deliveryMap = deliveryStaff.reduce((acc, d) => {
+      if (d.user) acc[d.user.toString()] = d.approvedStatus;
+      return acc;
+    }, {});
+
+    const mappedUsers = users.map(u => {
+      let approvedStatus = u.isApproved !== false ? 'approved' : 'rejected';
+      if (u.role === 'vendor') {
+        approvedStatus = vendorMap[u._id.toString()] || 'pending';
+      } else if (u.role === 'delivery') {
+        approvedStatus = deliveryMap[u._id.toString()] || 'pending';
+      }
+
+      return {
+        ...u,
+        studentId: studentMap[u._id.toString()] || null,
+        approvedStatus
+      };
+    });
     
     res.json(mappedUsers);
   } catch (error) {
@@ -210,7 +240,7 @@ const createUser = async (req, res) => {
 // @access  Private (Admin)
 const updateUser = async (req, res) => {
   try {
-    const { name, email, role, isApproved, password } = req.body;
+    const { name, email, role, isApproved, approvedStatus, password } = req.body;
     const user = await User.findById(req.params.id);
 
     if (!user) {
@@ -221,15 +251,28 @@ const updateUser = async (req, res) => {
     if (email) user.email = email;
     if (role) user.role = role;
     
-    if (isApproved !== undefined) {
-      user.isApproved = isApproved;
+    let finalStatus = approvedStatus;
+    if (finalStatus === undefined && isApproved !== undefined) {
+      finalStatus = isApproved ? 'approved' : 'rejected';
+    }
+
+    if (finalStatus !== undefined) {
+      user.isApproved = (finalStatus === 'approved');
       
       if (user.role === 'delivery') {
         const DeliveryPersonnel = require('../models/DeliveryPersonnel');
-        await DeliveryPersonnel.findOneAndUpdate({ user: user._id }, { approvedStatus: isApproved ? 'approved' : 'rejected' });
+        await DeliveryPersonnel.findOneAndUpdate(
+          { user: user._id },
+          { approvedStatus: finalStatus },
+          { upsert: true, new: true }
+        );
       } else if (user.role === 'vendor') {
         const Vendor = require('../models/Vendor');
-        await Vendor.findOneAndUpdate({ user: user._id }, { approvedStatus: isApproved ? 'approved' : 'rejected' });
+        await Vendor.findOneAndUpdate(
+          { user: user._id },
+          { approvedStatus: finalStatus },
+          { upsert: true, new: true }
+        );
       }
     }
     
