@@ -2013,7 +2013,7 @@ function isFilled(value) {
 }
 
 function isValidKenyanPhone(value) {
-  return /^07\d{8}$/.test(cleanString(value));
+  return /^(?:07|01)\d{8}$/.test(cleanString(value));
 }
 
 function isValidEmail(value) {
@@ -2230,7 +2230,7 @@ function validateRegistrationPayload({
   }
 
   if (!isValidKenyanPhone(phone)) {
-    return "Phone number must be 10 digits and start with 07.";
+    return "Phone number must be 10 digits and start with 07 or 01.";
   }
 
   if (!isReviewOnlyRole(role)) {
@@ -2275,7 +2275,7 @@ function validateRegistrationPayload({
     const contact = profile?.contact || profile?.emergencyContact || phone;
 
     if (!isValidKenyanPhone(contact)) {
-      return "Contact must be 10 digits and start with 07.";
+      return "Contact must be 10 digits and start with 07 or 01.";
     }
   }
 
@@ -2320,6 +2320,12 @@ async function register(req, res) {
 
     if (exists) {
       return res.status(409).json({ message: "Email already in use" });
+    }
+
+    const phoneExists = await User.findOne({ phone: cleanString(phone) });
+
+    if (phoneExists) {
+      return res.status(409).json({ message: "Phone number already in use" });
     }
 
     const reviewOnly = isReviewOnlyRole(cleanRole);
@@ -2656,7 +2662,7 @@ async function completeProfile(req, res) {
 
     if (!isValidKenyanPhone(cleanPhone)) {
       return res.status(400).json({
-        message: "Phone number must be 10 digits and start with 07.",
+        message: "Phone number must be 10 digits and start with 07 or 01.",
       });
     }
 
