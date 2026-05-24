@@ -1,8 +1,9 @@
-const axios = require('axios');
 const Wallet = require('../models/Wallet');
 const Transaction = require('../models/Transaction');
 const PayheroDeposit = require('../models/PayheroDeposit');
-const stellarService = require('../services/stellarService');
+const walletService = require('../services/walletService');
+const stellarTreasuryService = require('../services/stellarTreasuryService');
+const axios = require('axios');
 const crypto = require('crypto');
 
 // Start PayHero STK Push
@@ -65,7 +66,6 @@ const payheroDeposit = async (req, res) => {
         }
     } catch (error) {
         console.error("PayHero STK Push error:", error.message);
-        if (error.response) console.error(error.response.data);
         res.status(500).json({ message: 'PayHero request failed', error: error.message });
     }
 };
@@ -86,12 +86,48 @@ const payheroCallback = async (req, res) => {
         const amountPaid = body.Amount;
         const mpesaReceiptNumber = body.MpesaReceiptNumber;
         const phonePaidFrom = body.PhoneNumber;
+
+        // Check if this callback corresponds to an instant custom order
+        const CustomOrder = require('../models/CustomOrder');
+        const customOrder = await CustomOrder.findOne({ checkoutRequestID: externalReference });
+
+        if (customOrder) {
+            if (status !== 'Success') {
+                console.log(`PayHero STK Push for custom order ${customOrder.orderId} failed or cancelled.`);
+                customOrder.status = 'failed';
+                await customOrder.save();
+                return res.json({ success: true, message: "Acknowledged custom order payment failure" });
+            }
+
+            // Successfully paid direct PayHero order!
+            await walletService.processMpesaDirectCustomOrder(
+                externalReference,
+                amountPaid,
+                mpesaReceiptNumber,
+                phonePaidFrom
+            );
+
+            // Notify Vendor
+            const Vendor = require('../models/Vendor');
+            const vendorProfile = await Vendor.findById(customOrder.vendor);
+            if (vendorProfile) {
+                const Notification = require('../models/Notification');
+                await Notification.create({
+                    user: vendorProfile.user,
+                    type: 'order',
+                    title: 'New Custom Order Paid (PayHero)',
+                    message: `Custom order ${customOrder.orderId} of KES ${amountPaid} has been paid via PayHero.`
+                });
+            }
+
+            return res.json({ success: true, message: "Custom order webhook processed successfully" });
+        }
         
         let depositRecord = await PayheroDeposit.findOne({ reference: externalReference });
 
         if (status !== 'Success') {
             const desc = body.ResultDesc || "Failed/Cancelled";
-            console.log(`PayHero STK Push failed or cancelled by user. Desc: ${desc}`);
+            console.log(`PayHero STK Push failed or cancelled. Desc: ${desc}`);
             if (depositRecord) {
                 depositRecord.status = 'failed';
                 await depositRecord.save();
@@ -110,50 +146,24 @@ const payheroCallback = async (req, res) => {
 
         console.log(`User ${userId} successfully paid ${amountPaid} via PayHero M-Pesa ${mpesaReceiptNumber}`);
 
-        // 1. Give the user an actual Stellar/Local wallet equivalent!
-        let wallet = await Wallet.findOne({ user: userId });
-        if (!wallet) {
-            console.log(`Provisioning missing Stellar wallet for user ${userId} upon PayHero funding.`);
-            const keypair = await stellarService.createWallet();
-            wallet = await Wallet.create({
-                user: userId,
-                stellarPublicKey: keypair.publicKey,
-                stellarSecretKey: keypair.secret,
-                walletType: 'student', // Defaulting to student for this workflow
-                balance: 0
-            });
-        }
+        // Credit local custodial wallet balance and log Transaction
+        await walletService.creditWallet(
+            userId,
+            amountPaid,
+            'deposit',
+            'mpesa',
+            `PayHero Deposit (Receipt: ${mpesaReceiptNumber})`
+        );
 
-        // 2. Perform the actual XLM transfer from Platform Admin to the User's Wallet
-        if (stellarService.platformKey) {
-            console.log(`Executing real Stellar transfer from Platform to User ${userId} for ${amountPaid} KES`);
+        // Optional platform level Stellar mirror
+        if (stellarTreasuryService.platformWallets.issuer.secret) {
             try {
-                await stellarService.makePayment(
-                    stellarService.platformKey.secret(),
-                    wallet.stellarPublicKey,
-                    amountPaid
-                );
-                console.log("Stellar payment successful. Network balance is now synchronized.");
+                await stellarTreasuryService.settleToEscrow(amountPaid);
+                console.log("On-chain treasury mirror successful.");
             } catch (err) {
-                console.error("Critical: Failed to sync PayHero deposit to Stellar network!", err);
+                console.error("On-chain treasury mirror failed. Local balance is credited anyway:", err.message);
             }
-        } else {
-             console.warn("PLATFORM_SECRET_KEY missing. Skipping Stellar network synchronization.");
         }
-
-        // Increment the local database for immediate UI update before the next network pull
-        wallet.balance += Number(amountPaid);
-        await wallet.save();
-
-        // Log the Transaction
-        await Transaction.create({
-            fromWallet: null, // "Platform/Mpesa"
-            toWallet: wallet._id,
-            amount: amountPaid,
-            type: 'deposit',
-            description: `PayHero M-Pesa Deposit from ${phonePaidFrom} (Receipt: ${mpesaReceiptNumber})`,
-            status: 'completed'
-        });
 
         res.json({ success: true, message: "Webhook processed" });
     } catch (e) {

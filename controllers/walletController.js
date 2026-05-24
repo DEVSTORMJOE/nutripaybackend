@@ -1,52 +1,24 @@
-const Wallet = require('../models/Wallet');
+const walletService = require('../services/walletService');
 const Transaction = require('../models/Transaction');
-const stellarService = require('../services/stellarService');
 
 // @desc    Get wallet balance
 // @route   GET /api/wallet/balance
 // @access  Private
 const getWalletBalance = async (req, res) => {
   try {
-    let wallet = await Wallet.findOne({ user: req.user.id });
-    
-    // Auto-provision wallet if it doesn't exist
-    if (!wallet) {
-      console.log(`Provisioning missing Stellar wallet for user ${req.user.id} during balance check.`);
-      const role = req.user.role || 'student';
-      const fund = !['vendor', 'delivery'].includes(role);
-      const keypair = await stellarService.createWallet(fund);
-      wallet = await Wallet.create({
-          user: req.user.id,
-          stellarPublicKey: keypair.publicKey,
-          stellarSecretKey: keypair.secret,
-          walletType: role,
-          balance: 0
-      });
-    }
+    const role = req.user.role || 'student';
+    const wallet = await walletService.getOrCreateWallet(req.user.id, role);
 
-    // Try fetching live balance from Stellar Network
-    try {
-      if (wallet.stellarPublicKey) {
-        const liveXlmBalance = await stellarService.getBalance(wallet.stellarPublicKey);
-        
-        if (liveXlmBalance !== null) {
-            // Convert live XLM balance to KES
-            const liveKesBalance = stellarService.XLM_to_KES(liveXlmBalance);
-            
-            // Only update if it is a valid positive number
-            if (!isNaN(liveKesBalance) && parseFloat(liveKesBalance) >= 0) {
-                wallet.balance = parseFloat(liveKesBalance);
-                await wallet.save();
-            }
-        }
-      }
-    } catch (stellarError) {
-      console.error("Failed to fetch live Stellar balance, falling back to MongoDB cache:", stellarError);
-    }
-
-    res.json({ balance: wallet.balance, publicKey: wallet.stellarPublicKey });
+    res.json({
+      availableBalanceKES: wallet.availableBalanceKES,
+      lockedBalanceKES: wallet.lockedBalanceKES,
+      pendingWithdrawalKES: wallet.pendingWithdrawalKES,
+      // Backwards compatibility for older UI/scripts
+      balance: wallet.availableBalanceKES,
+      publicKey: null // No longer exposing Stellar public key to users
+    });
   } catch (error) {
-    console.error(error);
+    console.error("Get Wallet Balance Error:", error);
     res.status(500).json({ message: 'Server Error' });
   }
 };
@@ -56,16 +28,16 @@ const getWalletBalance = async (req, res) => {
 // @access  Private
 const getTransactions = async (req, res) => {
   try {
-    const wallet = await Wallet.findOne({ user: req.user.id });
-    if (!wallet) return res.status(404).json({ message: 'Wallet not found' });
-
     const transactions = await Transaction.find({
-      $or: [{ fromWallet: wallet._id }, { toWallet: wallet._id }]
-    }).sort({ createdAt: -1 });
+      $or: [{ fromUser: req.user.id }, { toUser: req.user.id }]
+    })
+    .populate('fromUser', 'name email role')
+    .populate('toUser', 'name email role')
+    .sort({ createdAt: -1 });
 
     res.json(transactions);
   } catch (error) {
-    console.error(error);
+    console.error("Get Wallet Transactions Error:", error);
     res.status(500).json({ message: 'Server Error' });
   }
 };
@@ -78,23 +50,24 @@ const mockFund = async (req, res) => {
     const { amountKes } = req.body;
     
     if (!amountKes || amountKes <= 0) {
-        return res.status(400).json({ message: "Please provide a valid KES amount to fund." });
+      return res.status(400).json({ message: "Please provide a valid KES amount to fund." });
     }
 
-    let wallet = await Wallet.findOne({ user: req.user.id });
-    if (!wallet) {
-      return res.status(404).json({ message: "Wallet not found. Please check your balance first to auto-provision." });
-    }
+    const result = await walletService.creditWallet(
+      req.user.id,
+      amountKes,
+      'deposit',
+      'wallet',
+      `Mock top-up of ${amountKes} KES`
+    );
 
-    // For the prototype, we just artificially increase the MongoDB KES balance.
-    // In a real app, this would be an M-Pesa or Card webhook that then triggers a real Stellar mint/transfer.
-    wallet.balance += Number(amountKes);
-    await wallet.save();
-
-    res.json({ message: `Successfully added ${amountKes} KES mock balance!`, newBalance: wallet.balance });
+    res.json({
+      message: `Successfully added ${amountKes} KES mock balance!`,
+      newBalance: result.wallet.availableBalanceKES
+    });
   } catch (error) {
     console.error("Mock fund error:", error);
-    res.status(500).json({ message: 'Server error during mock funding.' });
+    res.status(500).json({ message: 'Server error during mock funding: ' + error.message });
   }
 };
 

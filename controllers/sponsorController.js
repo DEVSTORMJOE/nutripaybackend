@@ -1,9 +1,9 @@
 const User = require('../models/User');
 const Wallet = require('../models/Wallet');
 const Transaction = require('../models/Transaction');
-const Subscription = require('../models/Subscription');
 const Delivery = require('../models/Delivery');
-const stellarService = require('../services/stellarService');
+const walletService = require('../services/walletService');
+const escrowService = require('../services/escrowService');
 const notificationService = require('../services/notificationService');
 
 // @desc    Get sponsor dashboard stats
@@ -12,25 +12,13 @@ const notificationService = require('../services/notificationService');
 const getDashboard = async (req, res) => {
   try {
     const sponsorId = req.user.id;
-    let wallet = await Wallet.findOne({ user: sponsorId });
-    
-    // Auto-provision wallet if missing (e.g. registered via UI instead of Add Sponsor flow)
-    if (!wallet) {
-      console.log(`Provisioning missing Stellar wallet for sponsor ${sponsorId}.`);
-      const keypair = await stellarService.createWallet(true); // true = friendbot funding
-      wallet = await Wallet.create({
-        user: sponsorId,
-        stellarPublicKey: keypair.publicKey,
-        stellarSecretKey: keypair.secret,
-        walletType: 'sponsor',
-        balance: 10000 // Testnet default
-      });
-    }
-
+    const wallet = await walletService.getOrCreateWallet(sponsorId, 'sponsor');
     const beneficiaries = await User.findById(sponsorId).populate('linkedAccounts', 'name email');
 
     res.json({
-      balance: wallet ? wallet.balance : 0,
+      balance: wallet.availableBalanceKES,
+      availableBalanceKES: wallet.availableBalanceKES,
+      lockedBalanceKES: wallet.lockedBalanceKES,
       beneficiaries: beneficiaries ? beneficiaries.linkedAccounts : []
     });
   } catch (error) {
@@ -44,50 +32,45 @@ const getDashboard = async (req, res) => {
 // @access  Private (Sponsor)
 const fundStudentWallet = async (req, res) => {
   const { studentId, amount } = req.body;
+  const sponsorId = req.user.id;
 
   try {
-    const sponsorWallet = await Wallet.findOne({ user: req.user.id }).select('+stellarSecretKey');
-    const studentWallet = await Wallet.findOne({ user: studentId });
+    const sponsorWallet = await walletService.getOrCreateWallet(sponsorId, 'sponsor');
+    const studentWallet = await walletService.getOrCreateWallet(studentId, 'student');
 
-    if (!sponsorWallet || !studentWallet) {
-      return res.status(404).json({ message: 'Wallets not found' });
+    if (sponsorWallet.availableBalanceKES < Number(amount)) {
+      return res.status(400).json({ message: 'Insufficient available balance in Sponsor Wallet' });
     }
 
-    // Perform Stellar Payment
-    // For prototype, we assume sponsorWallet has secret key stored (custodial)
-    // In production, sponsor would sign client-side or use a secure vault
-    if (!sponsorWallet.stellarSecretKey) {
-      return res.status(400).json({ message: 'Sponsor wallet secret not found (Non-custodial not supported in prototype)' });
-    }
-
-    const tx = await stellarService.fundWallet(sponsorWallet.stellarSecretKey, studentWallet.stellarPublicKey, amount);
-
-    // Record Transaction
-    await Transaction.create({
-      fromWallet: sponsorWallet._id,
-      toWallet: studentWallet._id,
+    // Debit sponsor, Credit student internally (both are custodial treasury balances, no Stellar Tx needed)
+    await walletService.debitWallet(
+      sponsorId,
       amount,
-      type: 'funding',
-      stellarTxHash: tx.hash,
-      description: `Funding for student ${studentId}`,
-      status: 'completed'
-    });
+      'funding',
+      'wallet',
+      `Sponsorship funding for student: ${studentId}`
+    );
 
-    // Update balances in DB (optional, but good for quick UI)
-    // In real app, listen to Stellar events
-    sponsorWallet.balance -= Number(amount);
-    studentWallet.balance += Number(amount);
-    await sponsorWallet.save();
-    await studentWallet.save();
+    await walletService.creditWallet(
+      studentId,
+      amount,
+      'funding',
+      'wallet',
+      `Sponsorship funding from sponsor: ${sponsorId}`
+    );
 
     // Notify
     const student = await User.findById(studentId);
-    await notificationService.sendPaymentSuccess(student.email, amount, 'Sponsorship Funding');
+    try {
+      await notificationService.sendPaymentSuccess(student.email, amount, 'Sponsorship Funding');
+    } catch (e) {
+      console.warn("Notification error:", e.message);
+    }
 
-    res.json({ message: 'Funding successful', txHash: tx.hash });
+    res.json({ message: 'Funding successful', newBalance: sponsorWallet.availableBalanceKES });
   } catch (error) {
     console.error(error);
-    res.status(500).json({ message: 'Payment failed' });
+    res.status(500).json({ message: 'Payment failed: ' + error.message });
   }
 };
 
@@ -168,66 +151,38 @@ const getPendingRequests = async (req, res) => {
   }
 };
 
-// @desc    Fund pending requests for a specific student
-// @route   POST /api/sponsor/fund-request
-// @access  Private (Sponsor)
 const fundRequest = async (req, res) => {
   const { studentId, deliveryIds } = req.body;
+  const sponsorId = req.user.id;
+
   try {
-    const deliveries = await Delivery.find({ _id: { $in: deliveryIds }, sponsor: req.user.id, status: 'awaiting_sponsor', student: studentId });
+    const deliveries = await Delivery.find({ _id: { $in: deliveryIds }, sponsor: sponsorId, status: 'awaiting_sponsor', student: studentId });
     if (deliveries.length === 0) return res.status(404).json({ message: "No pending requests found." });
 
     const totalKes = deliveries.reduce((acc, d) => acc + (d.totalCost || 0), 0);
 
-    const sponsorWallet = await Wallet.findOne({ user: req.user.id }).select('+stellarSecretKey');
-    const studentWallet = await Wallet.findOne({ user: studentId }).select('+stellarSecretKey');
-    
-    // We get Admin Escrow Wallet directly
-    let adminWallet = await Wallet.findOne({ walletType: 'admin' });
+    // 1. Debit Sponsor's available balance
+    await walletService.debitWallet(
+      sponsorId,
+      totalKes,
+      'funding',
+      'wallet',
+      `Subscription request funding for student: ${studentId}`
+    );
 
-    if (!sponsorWallet || !sponsorWallet.stellarSecretKey) return res.status(400).json({ message: "Sponsor wallet missing or invalid." });
-    if (!studentWallet || !studentWallet.stellarSecretKey) return res.status(400).json({ message: "Student wallet missing." });
-    if (!adminWallet) return res.status(500).json({ message: "Admin escrow missing." });
+    // 2. Credit Student's available balance first (unified available balance flow)
+    const creditRes = await walletService.creditWallet(
+      studentId,
+      totalKes,
+      'funding',
+      'wallet',
+      `Sponsor request funding from sponsor: ${sponsorId}`
+    );
+    creditRes.transaction.paymentSource = 'sponsor_funds';
+    await creditRes.transaction.save();
 
-    if (sponsorWallet.balance < totalKes) {
-      return res.status(400).json({ message: "Insufficient balance in Sponsor Wallet." });
-    }
-
-    // Process double payment via Escrow
-    // 1. Sponsor -> Student
-    const tx1 = await stellarService.makePayment(sponsorWallet.stellarSecretKey, studentWallet.stellarPublicKey, totalKes);
-    
-    // Log Transaction 1
-    await Transaction.create({
-      fromWallet: sponsorWallet._id,
-      toWallet: studentWallet._id,
-      amount: totalKes,
-      type: 'funding',
-      stellarTxHash: tx1.hash,
-      description: `Funding for student scheduled meals`,
-      status: 'completed'
-    });
-
-    // 2. Student -> Admin (Checkout Payment to Escrow)
-    const tx2 = await stellarService.makePayment(studentWallet.stellarSecretKey, adminWallet.stellarPublicKey, totalKes);
-
-    // Log Transaction 2
-    await Transaction.create({
-      fromWallet: studentWallet._id,
-      toWallet: adminWallet._id,
-      amount: totalKes,
-      type: 'payment',
-      stellarTxHash: tx2.hash,
-      description: `Cart checkout escrow for ${deliveries.length} days`,
-      status: 'completed'
-    });
-
-    // Balances
-    sponsorWallet.balance -= totalKes;
-    await sponsorWallet.save();
-
-    adminWallet.balance += totalKes;
-    await adminWallet.save();
+    // 3. Immediately lock subscription funds from the student's available balance to locked subscription balance
+    const lockResult = await escrowService.lockSubscriptionFunds(studentId, totalKes, sponsorId);
 
     // Update Deliveries to pending
     await Delivery.updateMany({ _id: { $in: deliveryIds } }, { $set: { status: 'pending' } });
@@ -252,10 +207,14 @@ const fundRequest = async (req, res) => {
       });
     }
 
-    res.json({ message: "Successfully funded student deliveries!", txHash: tx2.hash });
+    res.json({
+      message: "Successfully funded student deliveries!",
+      txHash: lockResult.transaction.stellarTxHash,
+      newBalance: lockResult.studentWallet.availableBalanceKES
+    });
   } catch (error) {
     console.error(error);
-    res.status(500).json({ message: "Failed to process sponsor checkout." });
+    res.status(500).json({ message: "Failed to process sponsor checkout: " + error.message });
   }
 };
 

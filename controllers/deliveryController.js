@@ -129,7 +129,7 @@
 const Delivery = require("../models/Delivery");
 const Wallet = require("../models/Wallet");
 const Transaction = require("../models/Transaction");
-const stellarService = require("../services/stellarService");
+const escrowService = require("../services/escrowService");
 
 // ✅ SMS (exactly as you defined it in services/sms.js). Optional import (won't break if missing)
 let sendText = null;
@@ -197,57 +197,17 @@ const markDelivered = async (req, res) => {
 
     const wasAlreadyDelivered = delivery.status === "delivered";
 
-    // ===== Existing payout logic (unchanged) =====
+    // ===== New hybrid custodial payout logic =====
     if (!wasAlreadyDelivered) {
-      const payoutKes = Number(delivery.totalCost || 0);
-
-      if (payoutKes > 0) {
-        // Find Admin Escrow Wallet and Vendor Wallet
-        const adminWallet = await Wallet.findOne({ walletType: "admin" }).select(
-          "+stellarSecretKey",
-        );
-
-        const vendorUserId =
-          delivery?.vendor?.user?._id || delivery?.vendor?.user; // supports populated or raw ObjectId
-        const vendorWallet = await Wallet.findOne({ user: vendorUserId }); // vendor.user is the User ObjectId
-
-        if (adminWallet && adminWallet.stellarSecretKey && vendorWallet) {
-          try {
-            // Payout from Admin to Vendor
-            const tx = await stellarService.makePayment(
-              adminWallet.stellarSecretKey,
-              vendorWallet.stellarPublicKey,
-              payoutKes,
-            );
-
-            // Log Payout Transaction
-            await Transaction.create({
-              fromWallet: adminWallet._id,
-              toWallet: vendorWallet._id,
-              amount: payoutKes,
-              type: "payout",
-              stellarTxHash: tx.hash,
-              description: `Payout for completed delivery ${delivery._id}`,
-              status: "completed",
-            });
-
-            // Update local balances
-            adminWallet.balance -= payoutKes;
-            await adminWallet.save();
-
-            vendorWallet.balance += payoutKes;
-            await vendorWallet.save();
-          } catch (payoutError) {
-            console.error("Payout failed during delivery completion:", payoutError);
-            return res.status(500).json({
-              message:
-                "Delivery marked but payout failed: " +
-                (payoutError.message || "Unknown error"),
-            });
-          }
-        } else {
-          console.warn("Wallet information missing. Cannot process vendor payout.");
-        }
+      try {
+        await escrowService.releaseDailyVendorPayment(deliveryId);
+      } catch (payoutError) {
+        console.error("Payout failed during delivery completion:", payoutError);
+        return res.status(500).json({
+          message:
+            "Delivery marked but payout failed: " +
+            (payoutError.message || "Unknown error"),
+        });
       }
     }
 

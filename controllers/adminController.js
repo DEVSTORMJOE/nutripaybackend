@@ -4,7 +4,7 @@ const Wallet = require('../models/Wallet');
 const Vendor = require('../models/Vendor');
 const Transaction = require('../models/Transaction');
 const Delivery = require('../models/Delivery');
-const stellarService = require('../services/stellarService');
+const walletService = require('../services/walletService');
 
 // @desc    Get system stats
 // @route   GET /api/admin/dashboard
@@ -15,7 +15,7 @@ const getDashboard = async (req, res) => {
     const meals = await Meal.countDocuments();
     // Sum of all wallet balances locally tracked
     const wallets = await Wallet.find();
-    const totalLiquidity = wallets.reduce((acc, w) => acc + w.balance, 0);
+    const totalLiquidity = wallets.reduce((acc, w) => acc + (w.availableBalanceKES || 0) + (w.lockedBalanceKES || 0), 0);
 
     res.json({
       totalUsers: users,
@@ -178,17 +178,30 @@ const getWallets = async (req, res) => {
 const getTransactions = async (req, res) => {
   try {
     const transactions = await Transaction.find()
-      .populate({
-        path: 'fromWallet',
-        populate: { path: 'user', select: 'name email role' }
-      })
-      .populate({
-        path: 'toWallet',
-        populate: { path: 'user', select: 'name email role' }
-      })
-      .sort({ createdAt: -1 });
+      .populate('fromUser', 'name email role')
+      .populate('toUser', 'name email role')
+      .sort({ createdAt: -1 })
+      .lean();
 
-    res.json(transactions);
+    // Map fromUser and toUser to match expected frontend structure: fromWallet.user and toWallet.user, along with amount
+    const mappedTransactions = transactions.map(tx => {
+      const type = tx.transactionCategory === 'vendor_payout' ? 'payout' : 
+                   tx.transactionCategory === 'mpesa_direct_order' ? 'payment' : 
+                   tx.transactionCategory === 'subscription_lock' ? 'payment' : 
+                   tx.transactionCategory === 'deposit' ? 'funding' : 
+                   tx.transactionCategory === 'withdrawal' ? 'withdrawal' : 
+                   tx.transactionCategory === 'refund' ? 'refund' : 'payment';
+
+      return {
+        ...tx,
+        amount: tx.amountKES,
+        type,
+        fromWallet: tx.fromUser ? { user: tx.fromUser, walletType: tx.fromUser.role } : null,
+        toWallet: tx.toUser ? { user: tx.toUser, walletType: tx.toUser.role } : null
+      };
+    });
+
+    res.json(mappedTransactions);
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: 'Server Error' });
@@ -313,20 +326,13 @@ const createVendor = async (req, res) => {
       requiresPasswordChange: true
     });
 
-    // 3. Create Stellar Wallet
-    const keypair = await stellarService.createWallet(false);
-    await Wallet.create({
-      user: user._id,
-      stellarPublicKey: keypair.publicKey,
-      stellarSecretKey: keypair.secret,
-      walletType: 'vendor',
-      balance: 0
-    });
-
+    // 3. Create Custodial Wallet
+    await walletService.getOrCreateWallet(user._id, 'vendor');
+ 
     // 4. Create Vendor Profile
     const vendor = await Vendor.create({
       user: user._id,
-      stellarPublicKey: keypair.publicKey,
+      stellarPublicKey: null,
       approvedStatus: approvedStatus || 'pending'
     });
 

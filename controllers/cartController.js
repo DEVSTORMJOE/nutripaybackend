@@ -1,12 +1,13 @@
 const Cart = require("../models/Cart");
 const Wallet = require("../models/Wallet");
-const stellarService = require("../services/stellarService");
 const User = require("../models/User");
 const Transaction = require("../models/Transaction");
 const Delivery = require("../models/Delivery");
 const Meal = require("../models/Meal");
 const crypto = require("crypto");
 const { sendMail } = require("../utils/mailer");
+const walletService = require("../services/walletService");
+const escrowService = require("../services/escrowService");
 
 async function getCart(req, res) {
   try {
@@ -86,86 +87,10 @@ async function checkoutCart(req, res) {
       return res.status(400).json({ message: "Cart total must be greater than 0" });
     }
 
-    // 2. Fetch Student Wallet
-    let studentWallet = await Wallet.findOne({ user: userId }).select('+stellarSecretKey');
-    
-    // Automatically provision wallet if missing
-    if (!studentWallet) {
-        console.log(`Provisioning missing Stellar wallet for user ${userId} during cart checkout.`);
-        const keypair = await stellarService.createWallet();
-        studentWallet = await Wallet.create({
-            user: userId,
-            stellarPublicKey: keypair.publicKey,
-            stellarSecretKey: keypair.secret,
-            walletType: req.user.role || 'student',
-            balance: 0
-        });
-    }
+    // 2. Lock subscription funds using the Escrow Service (both Mongo updates and Stellar Treasury -> Escrow)
+    const lockResult = await escrowService.lockSubscriptionFunds(userId, subtotalKes, null);
 
-    if (!studentWallet || !studentWallet.stellarSecretKey) {
-      return res.status(400).json({ message: "Student stellar wallet could not be accessed. Please contact support." });
-    }
-
-    // Ensure student wallet balance (KES display)
-    if (studentWallet.balance < subtotalKes) {
-      return res.status(400).json({ message: "Insufficient balance for this checkout." });
-    }
-
-    // 3. Find the Escrow (Admin) Wallet for the payment
-    // We will look for an Admin wallet to hold funds in escrow.
-    let adminWallet = await Wallet.findOne({ walletType: 'admin' });
-
-    if (!adminWallet) {
-        console.log(`Provisioning default Admin escrow wallet for checkouts.`);
-        
-        let adminUser = await User.findOne({ role: 'admin' });
-        
-        if (!adminUser) {
-            console.log("No admin user found. Creating a mock admin user for escrow.");
-            adminUser = await User.create({
-                name: "Admin Escrow",
-                email: "admin@nutripay.local",
-                password: "hashedpassword123", // bypassing auth
-                role: "admin"
-            });
-        }
-
-        const adminKeypair = await stellarService.createWallet();
-        
-        adminWallet = await Wallet.create({
-            user: adminUser._id,
-            stellarPublicKey: adminKeypair.publicKey,
-            stellarSecretKey: adminKeypair.secret,
-            walletType: 'admin',
-            balance: 0
-        });
-    }
-
-    let destinationPublicKey = adminWallet.stellarPublicKey;
-    let destinationWalletId = adminWallet._id;
-
-    // 4. Call Stellar Service Make Payment (KES to XLM handles inside)
-    const tx = await stellarService.makePayment(studentWallet.stellarSecretKey, destinationPublicKey, subtotalKes);
-
-    // 5. Log Transaction
-    await Transaction.create({
-      fromWallet: studentWallet._id,
-      toWallet: destinationWalletId, // May be null if fallback used
-      amount: subtotalKes,
-      type: 'payment',
-      stellarTxHash: tx.hash,
-      description: `Cart checkout for ${Object.keys(cart.schedule).length} days`,
-      status: 'completed'
-    });
-
-    // 6. Update local KES balances optimistically
-    studentWallet.balance -= subtotalKes;
-    await studentWallet.save();
-
-    adminWallet.balance += subtotalKes;
-    await adminWallet.save();
-
-    // 6.5. Create Deliveries for the scheduled days based on the actual Vendor of the meal
+    // 3. Create Deliveries for the scheduled days based on the actual Vendor of the meal
     const mealIdsToFetch = new Set();
     for (const date of Object.keys(cart.schedule)) {
       const day = cart.schedule[date];
@@ -229,8 +154,6 @@ async function checkoutCart(req, res) {
       const Notification = require("../models/Notification");
       const vendorTotals = {};
       deliveriesToInsert.forEach(d => {
-        // Here d.vendor is the string ID of the Vendor document. We actually need Vendor.user!
-        // Wait, I mapped mealVendorMap to Vendor's _id or User's _id?
         if(!vendorTotals[d.vendor]) vendorTotals[d.vendor] = 0;
         vendorTotals[d.vendor] += d.totalCost;
       });
@@ -249,13 +172,17 @@ async function checkoutCart(req, res) {
       }
     }
 
-    // 7. Clear Cart
+    // 4. Clear Cart
     await Cart.findOneAndUpdate({ user: userId }, { schedule: {} });
 
-    return res.json({ ok: true, txHash: tx.hash, newBalance: studentWallet.balance });
+    return res.json({
+      ok: true,
+      txHash: lockResult.transaction.stellarTxHash,
+      newBalance: lockResult.studentWallet.availableBalanceKES
+    });
   } catch (e) {
     console.error("Checkout failed:", e);
-    return res.status(500).json({ message: "Checkout Payment failed on network: " + (e.message || "Unknown error") });
+    return res.status(500).json({ message: "Checkout Payment failed: " + e.message });
   }
 }
 
@@ -281,7 +208,7 @@ async function addSponsorCheckout(req, res) {
 
     if (!sponsor) {
       isNewSponsor = true;
-      generatedPassword = crypto.randomBytes(4).toString("hex"); // e.g., 8 character random string
+      generatedPassword = crypto.randomBytes(4).toString("hex");
 
       sponsor = await User.create({
         name: sponsorName,
@@ -289,15 +216,15 @@ async function addSponsorCheckout(req, res) {
         password: generatedPassword, 
         role: "sponsor",
       });
-      // Create funded testnet wallet for the sponsor
-      const keypair = await stellarService.createWallet(true);
-      await Wallet.create({
-        user: sponsor._id,
-        stellarPublicKey: keypair.publicKey,
-        stellarSecretKey: keypair.secret,
-        walletType: "sponsor",
-        balance: 10000,
-      });
+      
+      // Initialize internal custodial sponsor wallet with 10,000 KES mock signup balance
+      await walletService.creditWallet(
+        sponsor._id,
+        10000,
+        'deposit',
+        'wallet',
+        'Initial Sponsor Signup Mock Funding'
+      );
     }
 
     // Link sponsor to student and vice versa

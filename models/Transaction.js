@@ -1,34 +1,68 @@
 const mongoose = require('mongoose');
 
 const transactionSchema = new mongoose.Schema({
-  fromWallet: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'Wallet'
+  transactionId: {
+    type: String,
+    required: true,
+    unique: true
   },
-  toWallet: {
+  fromUser: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'Wallet'
+    ref: 'User'
   },
-  amount: {
+  toUser: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User'
+  },
+  amountKES: {
     type: Number,
     required: true
   },
-  type: {
+  transactionCategory: {
     type: String,
-    enum: ['funding', 'payment', 'refund', 'payout', 'withdrawal', 'deposit'],
+    enum: [
+      'deposit',
+      'subscription_lock',
+      'custom_order',
+      'vendor_payout',
+      'withdrawal',
+      'refund',
+      'commission',
+      'escrow_release',
+      'mpesa_direct_order',
+      'funding'
+    ],
     required: true
+  },
+  paymentMethod: {
+    type: String,
+    enum: ['mpesa', 'wallet', 'stellar'],
+    required: true
+  },
+  paymentSource: {
+    type: String,
+    enum: [
+      'sponsor_funds',
+      'student_wallet',
+      'mpesa_direct'
+    ]
+  },
+  orderType: {
+    type: String,
+    enum: ['subscription', 'custom']
   },
   stellarTxHash: {
-    type: String,
-    required: true
+    type: String
   },
-  description: String,
+  escrowReference: {
+    type: String
+  },
   status: {
     type: String,
-    enum: ['pending', 'completed', 'failed'],
+    enum: ['pending', 'processing', 'completed', 'failed', 'reversed'],
     default: 'pending'
   }
 }, { timestamps: true });
 
-const Transaction = mongoose.model('Transaction', transactionSchema);
+const Transaction = mongoose.models.Transaction || mongoose.model('Transaction', transactionSchema);
 module.exports = Transaction;
