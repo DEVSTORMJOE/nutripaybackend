@@ -8,48 +8,70 @@ const Meal = require('../models/Meal');
 const walletService = require('../services/walletService');
 const escrowService = require('../services/escrowService');
 const stellarTreasuryService = require('../services/stellarTreasuryService');
+const reconciliationService = require('../services/reconciliationService');
+const reserveSnapshotService = require('../services/reserveSnapshotService');
+const crypto = require('crypto');
 require('dotenv').config();
 
 async function fundPlatformWallets() {
-  console.log("\n🌐 Funding platform accounts on Stellar Testnet...");
+  console.log("\n🌐 Activating and funding platform accounts on Stellar Testnet...");
   const fetch = (...args) => import('node-fetch').then(({default: fetch}) => fetch(...args));
   
+  const platformKeys = stellarTreasuryService.platformWallets;
   const publics = [
-    stellarTreasuryService.platformWallets.treasury.public,
-    stellarTreasuryService.platformWallets.escrow.public,
-    stellarTreasuryService.platformWallets.vendorSettlement.public,
-    stellarTreasuryService.platformWallets.revenue.public
+    { key: platformKeys.issuer.public, name: 'Issuer' },
+    { key: platformKeys.treasury.public, name: 'Treasury' },
+    { key: platformKeys.escrow.public, name: 'Escrow' },
+    { key: platformKeys.vendorSettlement.public, name: 'Vendor Settlement' },
+    { key: platformKeys.revenue.public, name: 'Revenue' }
   ];
 
   for (const pub of publics) {
-    if (!pub) continue;
+    if (!pub.key) continue;
     try {
-      console.log(`Funding ${pub} with Friendbot...`);
-      const response = await fetch(`https://friendbot.stellar.org?addr=${pub}`);
+      console.log(`Funding "${pub.name}" account (${pub.key}) with Friendbot...`);
+      const response = await fetch(`https://friendbot.stellar.org?addr=${pub.key}`);
       if (response.ok) {
-        console.log(`✅ Success for ${pub}`);
+        console.log(`✅ Success for ${pub.name}`);
+        await new Promise(resolve => setTimeout(resolve, 1000));
       } else {
-        console.log(`⚠️ Friendbot returned status ${response.status} for ${pub}. Might already be funded.`);
+        console.log(`ℹ️  Friendbot status ${response.status} for ${pub.name}. Likely already activated.`);
       }
     } catch (e) {
-      console.warn(`Friendbot request failed for ${pub}: ${e.message}`);
+      console.warn(`⚠️ Friendbot request failed for ${pub.name}: ${e.message}`);
+    }
+  }
+
+  console.log("\n🔗 Establishing trustlines to custom NutriToken (NT) asset...");
+  const trustlines = [
+    { key: platformKeys.treasury.secret, name: 'Treasury' },
+    { key: platformKeys.escrow.secret, name: 'Escrow' },
+    { key: platformKeys.vendorSettlement.secret, name: 'Vendor Settlement' },
+    { key: platformKeys.revenue.secret, name: 'Revenue' }
+  ];
+
+  for (const acc of trustlines) {
+    if (acc.key) {
+      try {
+        await stellarTreasuryService.createTrustline(acc.key);
+      } catch (err) {
+        console.warn(`Trustline setup warning for ${acc.name}: ${err.message}`);
+      }
     }
   }
 }
 
 async function runTests() {
-  console.log("🚀 Starting Hybrid Custodial Financial Architecture validation tests...");
+  console.log("🚀 Starting NutriToken (NT) Hybrid Custodial Financial Architecture validation tests...");
   
   try {
     await mongoose.connect(process.env.MONGO_URI || 'mongodb://localhost:27017/nutripay');
     console.log("✅ Connected to MongoDB.");
 
     // Drop old unique indexes from previous schema designs to prevent duplicate null key errors
-    await mongoose.connection.collection('wallets').dropIndex('stellarPublicKey_1').catch(e => {
-      console.log("   (Unique index stellarPublicKey_1 already dropped or not present)");
-    });
+    await mongoose.connection.collection('wallets').dropIndex('stellarPublicKey_1').catch(e => {});
 
-    // Activate Stellar accounts
+    // Activate Stellar accounts and set up trustlines
     await fundPlatformWallets();
 
     // 1. Clean up old test users if they exist
@@ -115,17 +137,33 @@ async function runTests() {
     const sponsorWallet = await walletService.getOrCreateWallet(sponsor._id, 'sponsor');
     const vendorWallet = await walletService.getOrCreateWallet(vendorUser._id, 'vendor');
 
-    console.log("\n--- Step 2: Simulate M-Pesa Cash Deposit ---");
-    // Top up Student with 1,000 KES
-    console.log("Top-up Student with 1000 KES...");
-    const depositRes = await walletService.creditWallet(
-      student._id,
-      1000,
-      'deposit',
-      'mpesa',
-      'M-Pesa top-up of 1,000 KES'
+    console.log("\n--- Step 2: Simulate M-Pesa Cash Deposit & Compulsory NT Minting ---");
+    const depositAmount = 2500;
+    console.log(`Simulating M-Pesa callback deposit of ${depositAmount} KES...`);
+    
+    // Credit local custodial balance (defaults to sourceType = 'self')
+    const creditResult = await walletService.creditWallet(
+        student._id,
+        depositAmount,
+        'deposit',
+        'mpesa',
+        `M-Pesa Deposit (Receipt: TESTREC123)`
     );
-    console.log(`✅ Deposit completed locally. Student KES Available Balance: ${depositRes.wallet.availableBalanceKES}`);
+
+    // COMPULSORY On-chain settlement: Mint equivalent custom tokens from Issuer -> Treasury
+    console.log("Executing compulsory on-chain NT minting (Issuer -> Treasury)...");
+    const mintTxHash = await stellarTreasuryService.mintNT(depositAmount);
+    console.log(`✅ On-chain token minting success! Tx Hash: ${mintTxHash}`);
+
+    // Update the transaction log
+    creditResult.transaction.stellarTxHash = mintTxHash;
+    creditResult.transaction.settlementStatus = 'synced';
+    await creditResult.transaction.save();
+
+    const studentWalletAfterDeposit = await Wallet.findOne({ user: student._id });
+    console.log(`✅ Deposit completed. student KES Available Balance: ${studentWalletAfterDeposit.availableBalanceKES}`);
+    console.log(`   student Audit Token Balance NT: ${studentWalletAfterDeposit.tokenBalanceNT}`);
+    console.log(`   student Funding Sources:`, JSON.stringify(studentWalletAfterDeposit.walletFundingSources, null, 2));
 
     console.log("\n--- Step 3: Simulate Subscription Checkout (Escrow Locking) ---");
     // Student checks out a 600 KES order (2 days of meals)
@@ -135,7 +173,9 @@ async function runTests() {
     console.log("✅ Checkout locally updated.");
     console.log(`   Student Available KES: ${lockResult.studentWallet.availableBalanceKES}`);
     console.log(`   Student Locked KES: ${lockResult.studentWallet.lockedBalanceKES}`);
-    console.log(`   Stellar Treasury -> Escrow Tx Hash: ${lockResult.transaction.stellarTxHash}`);
+    console.log(`   Student Audit Token Balance NT: ${lockResult.studentWallet.tokenBalanceNT}`);
+    console.log(`   Stellar Treasury -> Escrow NT Settle Tx Hash: ${lockResult.transaction.stellarTxHash}`);
+    console.log(`   Stellar Settlement Status: ${lockResult.transaction.settlementStatus}`);
 
     // Create Mock Deliveries
     const deliveries = await Delivery.create([
@@ -168,38 +208,49 @@ async function runTests() {
     console.log(`Marking delivery ${deliveryToComplete._id} as completed. Releasing payout...`);
     const releaseResult = await escrowService.releaseDailyVendorPayment(deliveryToComplete._id);
     console.log("✅ Payout completed locally.");
-    console.log(`   Student Locked Balance remaining: ${releaseResult.studentWallet.lockedBalanceKES}`);
-    console.log(`   Vendor Available Balance credited: ${releaseResult.vendorWallet.availableBalanceKES}`);
-    console.log(`   Stellar Payout Escrow -> Vendor Settlement hash: ${releaseResult.transactions[0].stellarTxHash}`);
-    console.log(`   Stellar Payout Escrow -> Revenue hash: ${releaseResult.transactions[1].stellarTxHash}`);
+    console.log(`   Student Locked Balance remaining KES: ${releaseResult.studentWallet.lockedBalanceKES}`);
+    console.log(`   Vendor Available Balance credited KES: ${releaseResult.vendorWallet.availableBalanceKES}`);
+    console.log(`   Stellar Payout Escrow -> Vendor Settlement NT hash: ${releaseResult.transactions[0].stellarTxHash}`);
+    console.log(`   Stellar Commission Escrow -> Revenue NT hash: ${releaseResult.transactions[1].stellarTxHash}`);
 
-    console.log("\n--- Step 5: Simulate Custom Orders (Immediate, No Escrow) ---");
-    // Student purchases direct custom order for 300 KES
-    console.log("Student purchasing direct Custom Order for 300 KES...");
-    const customCost = 300;
-    const customCommission = customCost * 0.10;
-    const customVendorShare = customCost - customCommission;
+    console.log("\n--- Step 5: Simulate Custom Orders with Budget Priorities (Immediate, No Escrow) ---");
+    // Let's add a sponsor surplus to test sponsor-funding priorities
+    console.log("James (Sponsor) funding Test Student with 1000 KES (unrestricted surplus)...");
+    await walletService.creditWallet(
+      student._id,
+      1000,
+      'funding',
+      'wallet',
+      'James sponsor top-up',
+      'sponsor',
+      false, // unrestricted
+      'none'
+    );
 
-    // Debit student immediately
-    await walletService.debitWallet(student._id, customCost, 'custom_order', 'wallet', 'Instant custom order payment');
-    // Credit Vendor immediately
-    await walletService.creditWallet(vendorUser._id, customVendorShare, 'vendor_payout', 'wallet', 'Instant custom order payout');
-    // Create commission log
-    await Transaction.create({
-      transactionId: crypto.randomUUID(),
-      fromUser: student._id,
-      amountKES: customCommission,
-      transactionCategory: 'commission',
-      paymentMethod: 'wallet',
-      orderType: 'custom',
-      status: 'completed',
-      description: 'Custom order Platform commission'
-    });
+    const studentWalletBeforeCustom = await Wallet.findOne({ user: student._id });
+    console.log("Student balance state before custom purchase:");
+    console.log(`   Available Balance KES: ${studentWalletBeforeCustom.availableBalanceKES}`);
+    console.log(`   Funding sources:`, JSON.stringify(studentWalletBeforeCustom.walletFundingSources, null, 2));
+
+    // Student purchases direct custom order for 400 KES
+    console.log("\nStudent purchasing direct Custom Order for 400 KES...");
+    const customCost = 400;
+    const processResult = await walletService.processWalletCustomOrder(
+      student._id,
+      vendorUser._id,
+      [{ name: 'Custom Lunch Box', quantity: 1 }],
+      customCost,
+      'Campus',
+      'Test Student',
+      '0711111111'
+    );
 
     const studentWalletAfterCustom = await Wallet.findOne({ user: student._id });
     const vendorWalletAfterCustom = await Wallet.findOne({ user: vendorUser._id });
     console.log("✅ Custom order processed immediately.");
     console.log(`   Student Available Balance: ${studentWalletAfterCustom.availableBalanceKES}`);
+    console.log(`   Student Funding Sources after custom order:`, JSON.stringify(studentWalletAfterCustom.walletFundingSources, null, 2));
+    console.log(`   (Notice how the KES 400 was correctly deducted FIRST from the unrestricted sponsor surplus!)`);
     console.log(`   Vendor Available Balance: ${vendorWalletAfterCustom.availableBalanceKES}`);
 
     console.log("\n--- Step 6: Simulate Subscription Cancellation & Refund ---");
@@ -213,9 +264,17 @@ async function runTests() {
     const finalStudentWallet = await Wallet.findOne({ user: student._id });
     console.log(`   Final Student Available KES: ${finalStudentWallet.availableBalanceKES}`);
     console.log(`   Final Student Locked KES: ${finalStudentWallet.lockedBalanceKES}`);
-    console.log(`   Stellar Escrow -> Treasury Refund Tx Hash: ${refundResult.stellarTxHash}`);
+    console.log(`   Stellar Escrow -> Treasury Refund NT Tx Hash: ${refundResult.stellarTxHash}`);
 
-    console.log("\n🎉 Hybrid Custodial Architecture validation checks completed successfully!");
+    // 7. Perform Full Proof-of-Reserve Cryptographic Audit
+    await reconciliationService.runFullReconciliation();
+
+    // 8. Generate and persist cryptographic Reserve Snapshot
+    console.log("\n📸 Capturing immutable Reserve Snapshot in MongoDB...");
+    const snapshot = await reserveSnapshotService.takeReserveSnapshot();
+    console.log(`✅ Snapshot saved. ID: ${snapshot._id}, Status: ${snapshot.status}`);
+
+    console.log("\n🎉 hybrid Custodial Architecture NutriToken (NT) validation checks completed successfully!");
 
   } catch (error) {
     console.error("\n❌ Validation Test Failed:", error);

@@ -8,33 +8,26 @@ const stellarTreasuryService = require('./stellarTreasuryService');
 const crypto = require('crypto');
 
 /**
- * Lock subscription funds: move KES from available to locked, and settle Treasury -> Escrow on Stellar
+ * Lock subscription funds: move KES from available to locked, and settle Treasury -> Escrow on Stellar (NT)
  */
 async function lockSubscriptionFunds(studentId, amountKes, sponsorId = null, session = null) {
   const funderId = sponsorId || studentId;
+  const sourceType = sponsorId ? 'sponsor' : 'self';
 
   console.log(`[Escrow Service] Locking subscription funds of ${amountKes} KES for student ${studentId}. Sponsor: ${sponsorId || 'none'}`);
 
-  // Lock locally
-  const studentWallet = await walletService.getOrCreateWallet(studentId, 'student', session);
+  // Lock locally (deducts from available buckets, credits locked balance, saves, and updates tokenBalanceNT)
+  const studentWallet = await walletService.lockFunds(studentId, amountKes, session);
 
-  if (studentWallet.availableBalanceKES < amountKes) {
-    throw new Error("Insufficient available balance in student wallet to fund subscription");
-  }
-
-  // Deduct from available spendable pool and add to protected locked balance
-  studentWallet.availableBalanceKES -= Number(amountKes);
-  studentWallet.totalSpentKES += Number(amountKes);
-  studentWallet.lockedBalanceKES += Number(amountKes);
-
-  await studentWallet.save({ session });
-
-  // Settle on-chain (Treasury -> Escrow)
+  // Settle on-chain (Treasury -> Escrow in NT)
   let stellarTxHash = "";
+  let settlementStatus = "pending";
   try {
     stellarTxHash = await stellarTreasuryService.settleToEscrow(amountKes);
+    settlementStatus = "synced";
   } catch (err) {
-    console.error("Critical Stellar escrow lock failed. Mirroring internally but flagging on-chain delay:", err.message);
+    console.error("Critical Stellar escrow lock failed. Logged locally, marked failed for retry queue:", err.message);
+    settlementStatus = "failed";
   }
 
   // Create locking transaction
@@ -49,6 +42,7 @@ async function lockSubscriptionFunds(studentId, amountKes, sponsorId = null, ses
     orderType: 'subscription',
     stellarTxHash: stellarTxHash || null,
     status: 'completed',
+    settlementStatus: settlementStatus,
     description: `Subscription lock of ${amountKes} KES for student`
   }], { session });
 
@@ -56,7 +50,7 @@ async function lockSubscriptionFunds(studentId, amountKes, sponsorId = null, ses
 }
 
 /**
- * Release proportional daily payout for completed delivery: Escrow -> Vendor and Escrow -> Revenue
+ * Release proportional daily payout for completed delivery: Escrow -> Vendor and Escrow -> Revenue on Stellar (NT)
  */
 async function releaseDailyVendorPayment(deliveryId, session = null) {
   const delivery = await Delivery.findById(deliveryId).session(session);
@@ -66,8 +60,9 @@ async function releaseDailyVendorPayment(deliveryId, session = null) {
   const totalCost = Number(delivery.totalCost || 0);
   if (totalCost <= 0) return { freeOrder: true };
 
-  // Calculate split: 90% Vendor, 10% Platform Commission
-  const commission = Number((totalCost * 0.10).toFixed(2));
+  // Calculate split based on configurable PLATFORM_COMMISSION_PERCENT (default 10%)
+  const commissionPercent = Number(process.env.PLATFORM_COMMISSION_PERCENT || 10) / 100;
+  const commission = Number((totalCost * commissionPercent).toFixed(2));
   const vendorShare = Number((totalCost - commission).toFixed(2));
 
   console.log(`[Escrow Service] Releasing daily payout for Delivery: ${deliveryId}. Cost: ${totalCost} KES. Vendor Share: ${vendorShare}, Commission: ${commission}`);
@@ -78,31 +73,50 @@ async function releaseDailyVendorPayment(deliveryId, session = null) {
     throw new Error(`Student locked balance is insufficient to cover delivery cost of ${totalCost}`);
   }
 
-  studentWallet.lockedBalanceKES -= totalCost;
+  studentWallet.lockedBalanceKES = Number((studentWallet.lockedBalanceKES - totalCost).toFixed(2));
   await studentWallet.save({ session });
 
-  // 2. Credit Vendor wallet
-  // In the Delivery schema, delivery.vendor is a ref to the Vendor model. We need to find the User linked to Vendor.
+  // 2. Credit Vendor wallet available balance and funding sources
   const vendorProfile = await Vendor.findById(delivery.vendor).session(session);
   if (!vendorProfile) throw new Error("Vendor profile not found");
   
-  const vendorWallet = await walletService.getOrCreateWallet(vendorProfile.user, 'vendor', session);
-  vendorWallet.availableBalanceKES += vendorShare;
-  await vendorWallet.save({ session });
+  const vendorWallet = await walletService.creditWallet(
+    vendorProfile.user,
+    vendorShare,
+    'vendor_payout',
+    'stellar',
+    `Payout for delivery ${deliveryId}`,
+    'self',
+    false,
+    'none',
+    session
+  );
 
-  // 3. Perform on-chain settlements
+  // 3. Perform on-chain settlements (NT Token transfers)
   let stellarTxHash1 = "";
   let stellarTxHash2 = "";
+  let settlementStatus1 = "pending";
+  let settlementStatus2 = "pending";
+
   try {
     // Escrow -> Vendor Settlement
     stellarTxHash1 = await stellarTreasuryService.releaseVendorSettlement(vendorShare);
-    // Escrow -> Revenue
-    stellarTxHash2 = await stellarTreasuryService.recordRevenue(commission);
+    settlementStatus1 = "synced";
   } catch (err) {
-    console.error("Critical Stellar delivery settlement failed. Processing local balances but flagging on-chain delay:", err.message);
+    console.error("Stellar delivery escrow release to Vendor failed. Marked failed for retry:", err.message);
+    settlementStatus1 = "failed";
   }
 
-  // 4. Log Transactions
+  try {
+    // Escrow -> Revenue
+    stellarTxHash2 = await stellarTreasuryService.recordRevenue(commission);
+    settlementStatus2 = "synced";
+  } catch (err) {
+    console.error("Stellar delivery escrow commission to Revenue failed. Marked failed for retry:", err.message);
+    settlementStatus2 = "failed";
+  }
+
+  // 4. Log Transactions in MongoDB
   const vendorTx = await Transaction.create([{
     transactionId: crypto.randomUUID(),
     fromUser: delivery.student,
@@ -113,6 +127,7 @@ async function releaseDailyVendorPayment(deliveryId, session = null) {
     orderType: 'subscription',
     stellarTxHash: stellarTxHash1 || null,
     status: 'completed',
+    settlementStatus: settlementStatus1,
     description: `Payout for delivery ${deliveryId}`
   }], { session });
 
@@ -125,14 +140,15 @@ async function releaseDailyVendorPayment(deliveryId, session = null) {
     orderType: 'subscription',
     stellarTxHash: stellarTxHash2 || null,
     status: 'completed',
+    settlementStatus: settlementStatus2,
     description: `Platform commission for delivery ${deliveryId}`
   }], { session });
 
-  return { studentWallet, vendorWallet, transactions: [vendorTx[0], commissionTx[0]] };
+  return { studentWallet, vendorWallet: vendorWallet.wallet, transactions: [vendorTx[0], commissionTx[0]] };
 }
 
 /**
- * Refund undelivered/cancelled subscription meals from Escrow -> Treasury on Stellar, and credit KES locally
+ * Refund undelivered/cancelled subscription meals from Escrow -> Treasury on Stellar (NT), and credit KES locally
  */
 async function calculateRefund(deliveryIds, studentId, session = null) {
   const deliveries = await Delivery.find({ _id: { $in: deliveryIds }, status: 'pending', student: studentId }).session(session);
@@ -161,50 +177,62 @@ async function calculateRefund(deliveryIds, studentId, session = null) {
   if (!studentWallet || studentWallet.lockedBalanceKES < totalRefundKes) {
     throw new Error("Student locked balance is insufficient to process this refund");
   }
-  studentWallet.lockedBalanceKES -= totalRefundKes;
+  studentWallet.lockedBalanceKES = Number((studentWallet.lockedBalanceKES - totalRefundKes).toFixed(2));
   await studentWallet.save({ session });
 
-  // Credit funder available balance
+  // Credit funder available balance locally (uses creditWallet which handles funding sources and NT balance update)
   if (totalRefundToSponsor > 0 && sponsorId) {
-    const sponsorWallet = await walletService.getOrCreateWallet(sponsorId, 'sponsor', session);
-    sponsorWallet.availableBalanceKES += totalRefundToSponsor;
-    sponsorWallet.totalRefundedKES += totalRefundToSponsor;
-    await sponsorWallet.save({ session });
-
-    await Transaction.create([{
-      transactionId: crypto.randomUUID(),
-      toUser: sponsorId,
-      amountKES: totalRefundToSponsor,
-      transactionCategory: 'refund',
-      paymentMethod: 'wallet',
-      status: 'completed',
-      description: `Refund for opted-out student pending deliveries`
-    }], { session });
+    await walletService.creditWallet(
+      sponsorId,
+      totalRefundToSponsor,
+      'refund',
+      'wallet',
+      `Refund for opted-out student pending deliveries`,
+      'sponsor',
+      false,
+      'none',
+      session
+    );
   }
 
   if (totalRefundToStudent > 0) {
-    studentWallet.availableBalanceKES += totalRefundToStudent;
-    studentWallet.totalRefundedKES += totalRefundToStudent;
-    await studentWallet.save({ session });
-
-    await Transaction.create([{
-      transactionId: crypto.randomUUID(),
-      toUser: studentId,
-      amountKES: totalRefundToStudent,
-      transactionCategory: 'refund',
-      paymentMethod: 'wallet',
-      status: 'completed',
-      description: `Refund for cancelled deliveries`
-    }], { session });
+    await walletService.creditWallet(
+      studentId,
+      totalRefundToStudent,
+      'refund',
+      'wallet',
+      `Refund for cancelled deliveries`,
+      'self',
+      false,
+      'none',
+      session
+    );
   }
 
-  // Stellar Settlement: Escrow -> Treasury (reversing locked funds)
+  // Stellar Settlement: Escrow -> Treasury (reversing locked funds on-chain using NT token)
   let stellarTxHash = "";
+  let settlementStatus = "pending";
   try {
     stellarTxHash = await stellarTreasuryService.reverseSettlement(totalRefundKes);
+    settlementStatus = "synced";
   } catch (err) {
-    console.error("Stellar refund reverse settlement failed. Processing locally:", err.message);
+    console.error("Stellar refund reverse settlement failed. Marked failed for retry queue:", err.message);
+    settlementStatus = "failed";
   }
+
+  // Record refund transaction log
+  await Transaction.create([{
+    transactionId: crypto.randomUUID(),
+    fromUser: studentId,
+    toUser: sponsorId || studentId,
+    amountKES: totalRefundKes,
+    transactionCategory: 'refund',
+    paymentMethod: 'wallet',
+    status: 'completed',
+    settlementStatus: settlementStatus,
+    stellarTxHash: stellarTxHash || null,
+    description: `Refund for cancelled/opt-out deliveries`
+  }], { session });
 
   // Update delivery statuses to cancelled
   await Delivery.updateMany({ _id: { $in: deliveryIds } }, { $set: { status: 'cancelled' } }).session(session);

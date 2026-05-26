@@ -1989,7 +1989,7 @@ const DeliveryPersonnel = require("../models/DeliveryPersonnel");
 const admin = require("../config/firebaseAdmin");
 
 function signToken(userId) {
-  return jwt.sign({ id: userId }, process.env.JWT_SECRET, { expiresIn: "30d" });
+  return jwt.sign({ id: userId }, process.env.JWT_SECRET, { expiresIn: "7d" });
 }
 
 function dashboardUrlForRole(role) {

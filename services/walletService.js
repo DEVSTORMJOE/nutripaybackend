@@ -15,7 +15,8 @@ async function getOrCreateWallet(userId, role = 'student', session = null) {
       availableBalanceKES: 0,
       lockedBalanceKES: 0,
       pendingWithdrawalKES: 0,
-      status: 'active'
+      status: 'active',
+      walletFundingSources: []
     }], { session });
     wallet = wallet[0];
   }
@@ -23,23 +24,55 @@ async function getOrCreateWallet(userId, role = 'student', session = null) {
 }
 
 /**
- * Credit available balance to a user's wallet
+ * Credit available balance to a user's wallet (including attribution system)
  */
-async function creditWallet(userId, amountKes, category, paymentMethod, description = "", session = null) {
+async function creditWallet(
+  userId,
+  amountKes,
+  category,
+  paymentMethod,
+  description = "",
+  sourceType = 'self',
+  restrictedUsage = false,
+  restrictedUsageType = 'none',
+  session = null
+) {
   const wallet = await getOrCreateWallet(userId, 'student', session);
   
   if (wallet.status === 'frozen' || wallet.status === 'suspended') {
     throw new Error(`Cannot credit wallet: Wallet is ${wallet.status}`);
   }
 
-  wallet.availableBalanceKES += Number(amountKes);
+  // Credit locally
+  wallet.availableBalanceKES = Number((wallet.availableBalanceKES + Number(amountKes)).toFixed(2));
   
   if (category === 'deposit') {
-    wallet.totalDepositedKES += Number(amountKes);
+    wallet.totalDepositedKES = Number((wallet.totalDepositedKES + Number(amountKes)).toFixed(2));
   } else if (category === 'refund') {
-    wallet.totalRefundedKES += Number(amountKes);
+    wallet.totalRefundedKES = Number((wallet.totalRefundedKES + Number(amountKes)).toFixed(2));
   }
 
+  // Update Funding Sources attribution buckets
+  let existingSource = wallet.walletFundingSources.find(
+    s => s.sourceType === sourceType &&
+         s.restrictedUsage === restrictedUsage &&
+         s.restrictedUsageType === restrictedUsageType
+  );
+
+  if (existingSource) {
+    existingSource.amountKES = Number((existingSource.amountKES + Number(amountKes)).toFixed(2));
+  } else {
+    wallet.walletFundingSources.push({
+      sourceType,
+      amountKES: Number(amountKes),
+      restrictedUsage,
+      restrictedUsageType,
+      nutritionCategory: [],
+      expiryDate: null
+    });
+  }
+
+  // Save changes (runs pre-save hook to keep tokenBalanceNT in sync!)
   await wallet.save({ session });
 
   const tx = await Transaction.create([{
@@ -49,6 +82,7 @@ async function creditWallet(userId, amountKes, category, paymentMethod, descript
     transactionCategory: category,
     paymentMethod: paymentMethod,
     status: 'completed',
+    settlementStatus: 'pending',
     description: description
   }], { session });
 
@@ -56,9 +90,84 @@ async function creditWallet(userId, amountKes, category, paymentMethod, descript
 }
 
 /**
+ * Deduct funds from Wallet Funding Sources following strict prioritization rules
+ */
+function deductFromFundingSources(wallet, amountKes, isSubscription = false) {
+  let remainingToDeduct = Number(amountKes);
+
+  // Sorting priorities:
+  // For Subscriptions:
+  // 1. Sponsored subscription-only restricted (sourceType='sponsor', restrictedUsageType='subscription_only')
+  // 2. Sponsored unrestricted surplus (sourceType='sponsor', restrictedUsage=false)
+  // 3. Self-funded (sourceType='self')
+  // 4. Others
+  //
+  // For Custom Orders / General Debits:
+  // 1. Sponsored unrestricted surplus (sourceType='sponsor', restrictedUsage=false)
+  // 2. Self-funded (sourceType='self')
+  // (Skip/lowest priority for subscription-only restricted)
+  
+  let sortedSources = [...wallet.walletFundingSources];
+  sortedSources.sort((a, b) => {
+    const getPriority = (source) => {
+      if (isSubscription) {
+        if (source.sourceType === 'sponsor' && source.restrictedUsageType === 'subscription_only') return 1;
+        if (source.sourceType === 'sponsor' && !source.restrictedUsage) return 2;
+        if (source.sourceType === 'self') return 3;
+        return 4;
+      } else {
+        if (source.sourceType === 'sponsor' && !source.restrictedUsage) return 1;
+        if (source.sourceType === 'self') return 2;
+        if (source.restrictedUsageType === 'subscription_only') return 99; // strictly skip or push to end
+        return 3;
+      }
+    };
+    return getPriority(a) - getPriority(b);
+  });
+
+  for (let source of sortedSources) {
+    if (remainingToDeduct <= 0) break;
+
+    // Custom orders MUST NOT consume subscription_only restricted usage funds
+    if (!isSubscription && source.restrictedUsageType === 'subscription_only') {
+      continue;
+    }
+
+    const deductFromSource = Math.min(source.amountKES, remainingToDeduct);
+    source.amountKES = Number((source.amountKES - deductFromSource).toFixed(2));
+    remainingToDeduct = Number((remainingToDeduct - deductFromSource).toFixed(2));
+    
+    // Find the original source reference and update it
+    let orig = wallet.walletFundingSources.find(
+      s => s.sourceType === source.sourceType &&
+           s.restrictedUsage === source.restrictedUsage &&
+           s.restrictedUsageType === source.restrictedUsageType
+    );
+    if (orig) {
+      orig.amountKES = source.amountKES;
+    }
+  }
+
+  if (remainingToDeduct > 0) {
+    throw new Error("Insufficient matching funds within wallet buckets");
+  }
+
+  // Filter out completely depleted sources
+  wallet.walletFundingSources = wallet.walletFundingSources.filter(s => s.amountKES > 0);
+}
+
+/**
  * Debit available balance from a user's wallet
  */
-async function debitWallet(userId, amountKes, category, paymentMethod, description = "", session = null) {
+async function debitWallet(
+  userId,
+  amountKes,
+  category,
+  paymentMethod,
+  description = "",
+  isSubscription = false,
+  session = null
+) {
   const wallet = await getOrCreateWallet(userId, 'student', session);
   
   if (wallet.status === 'frozen' || wallet.status === 'suspended') {
@@ -69,8 +178,11 @@ async function debitWallet(userId, amountKes, category, paymentMethod, descripti
     throw new Error("Insufficient available balance");
   }
 
-  wallet.availableBalanceKES -= Number(amountKes);
-  wallet.totalSpentKES += Number(amountKes);
+  // Deduct from local buckets
+  deductFromFundingSources(wallet, amountKes, isSubscription);
+
+  wallet.availableBalanceKES = Number((wallet.availableBalanceKES - Number(amountKes)).toFixed(2));
+  wallet.totalSpentKES = Number((wallet.totalSpentKES + Number(amountKes)).toFixed(2));
 
   await wallet.save({ session });
 
@@ -81,6 +193,7 @@ async function debitWallet(userId, amountKes, category, paymentMethod, descripti
     transactionCategory: category,
     paymentMethod: paymentMethod,
     status: 'completed',
+    settlementStatus: 'pending',
     description: description
   }], { session });
 
@@ -101,8 +214,11 @@ async function lockFunds(userId, amountKes, session = null) {
     throw new Error("Insufficient available balance to lock");
   }
 
-  wallet.availableBalanceKES -= Number(amountKes);
-  wallet.lockedBalanceKES += Number(amountKes);
+  // Deduct from available buckets (enforcing subscription priorities)
+  deductFromFundingSources(wallet, amountKes, true);
+
+  wallet.availableBalanceKES = Number((wallet.availableBalanceKES - Number(amountKes)).toFixed(2));
+  wallet.lockedBalanceKES = Number((wallet.lockedBalanceKES + Number(amountKes)).toFixed(2));
 
   await wallet.save({ session });
   return wallet;
@@ -118,21 +234,54 @@ async function unlockFunds(userId, amountKes, session = null) {
     throw new Error("Insufficient locked balance to unlock");
   }
 
-  wallet.lockedBalanceKES -= Number(amountKes);
-  wallet.availableBalanceKES += Number(amountKes);
+  wallet.lockedBalanceKES = Number((wallet.lockedBalanceKES - Number(amountKes)).toFixed(2));
+  wallet.availableBalanceKES = Number((wallet.availableBalanceKES + Number(amountKes)).toFixed(2));
+
+  // Restore as self-funded balance when unlocking
+  let selfSource = wallet.walletFundingSources.find(s => s.sourceType === 'self');
+  if (selfSource) {
+    selfSource.amountKES = Number((selfSource.amountKES + Number(amountKes)).toFixed(2));
+  } else {
+    wallet.walletFundingSources.push({
+      sourceType: 'self',
+      amountKES: Number(amountKes),
+      restrictedUsage: false,
+      restrictedUsageType: 'none',
+      nutritionCategory: [],
+      expiryDate: null
+    });
+  }
 
   await wallet.save({ session });
   return wallet;
 }
 
 /**
- * Process refund: Release from lockedBalanceKES and credit availableBalanceKES (either Student or Sponsor)
+ * Process refund: Release from lockedBalanceKES and credit availableBalanceKES
  */
-async function refundFunds(userId, amountKes, category, session = null) {
+async function refundFunds(userId, amountKes, category, sourceType = 'self', session = null) {
   const wallet = await getOrCreateWallet(userId, 'student', session);
 
-  wallet.availableBalanceKES += Number(amountKes);
-  wallet.totalRefundedKES += Number(amountKes);
+  wallet.availableBalanceKES = Number((wallet.availableBalanceKES + Number(amountKes)).toFixed(2));
+  wallet.totalRefundedKES = Number((wallet.totalRefundedKES + Number(amountKes)).toFixed(2));
+
+  // Add back to designated funding sources bucket
+  let existingSource = wallet.walletFundingSources.find(
+    s => s.sourceType === sourceType && s.restrictedUsageType === 'none'
+  );
+
+  if (existingSource) {
+    existingSource.amountKES = Number((existingSource.amountKES + Number(amountKes)).toFixed(2));
+  } else {
+    wallet.walletFundingSources.push({
+      sourceType,
+      amountKES: Number(amountKes),
+      restrictedUsage: false,
+      restrictedUsageType: 'none',
+      nutritionCategory: [],
+      expiryDate: null
+    });
+  }
 
   await wallet.save({ session });
   return wallet;
@@ -150,7 +299,8 @@ async function getSpendableBalance(userId, role = 'student', session = null) {
  * Split custom order revenue into vendor share and platform commission
  */
 function splitCustomOrderRevenue(orderTotal) {
-  const platformRate = paymentConfig.platformCommissionRate || 0.10;
+  const commissionPercent = Number(process.env.PLATFORM_COMMISSION_PERCENT || 10) / 100;
+  const platformRate = paymentConfig.platformCommissionRate || commissionPercent;
   const deliveryFee = paymentConfig.deliveryFeeRate || 0;
   
   const commission = Number((orderTotal * platformRate).toFixed(2));
@@ -174,6 +324,7 @@ async function processWalletCustomOrder(userId, vendorUserId, items, totalCost, 
     'custom_order',
     'wallet',
     `Custom order payment`,
+    false, // isSubscription = false
     session
   );
   
@@ -191,6 +342,9 @@ async function processWalletCustomOrder(userId, vendorUserId, items, totalCost, 
     'vendor_payout',
     'wallet',
     `Custom order payout`,
+    'self',
+    false,
+    'none',
     session
   );
   creditResult.transaction.paymentSource = 'student_wallet';
@@ -206,6 +360,7 @@ async function processWalletCustomOrder(userId, vendorUserId, items, totalCost, 
     paymentMethod: 'wallet',
     paymentSource: 'student_wallet',
     status: 'completed',
+    settlementStatus: 'pending',
     description: `Platform commission for custom order`
   }], { session });
 
@@ -244,6 +399,9 @@ async function processMpesaDirectCustomOrder(checkoutRequestID, amountPaid, mpes
     'vendor_payout',
     'mpesa',
     `Custom order direct M-Pesa payout (Receipt: ${mpesaReceiptNumber})`,
+    'self',
+    false,
+    'none',
     session
   );
   creditResult.transaction.paymentSource = 'mpesa_direct';
@@ -259,6 +417,7 @@ async function processMpesaDirectCustomOrder(checkoutRequestID, amountPaid, mpes
     paymentMethod: 'mpesa',
     paymentSource: 'mpesa_direct',
     status: 'completed',
+    settlementStatus: 'pending',
     description: `Platform commission for direct M-Pesa order (Receipt: ${mpesaReceiptNumber})`
   }], { session });
 
@@ -272,6 +431,7 @@ async function processMpesaDirectCustomOrder(checkoutRequestID, amountPaid, mpes
     paymentMethod: 'mpesa',
     paymentSource: 'mpesa_direct',
     status: 'completed',
+    settlementStatus: 'pending',
     description: `Direct M-Pesa checkout for order ${order.orderId} (Receipt: ${mpesaReceiptNumber})`
   }], { session });
 
@@ -307,13 +467,24 @@ async function refundCustomOrder(orderId, session = null) {
       'refund',
       'wallet',
       `Refund for custom order ${order.orderId}`,
+      'self',
+      false,
+      'none',
       session
     );
 
     // 2. Deduct vendor share
     if (vendorProfile) {
       const vendorWallet = await getOrCreateWallet(vendorProfile.user, 'vendor', session);
-      vendorWallet.availableBalanceKES -= vendorShare;
+      vendorWallet.availableBalanceKES = Number((vendorWallet.availableBalanceKES - vendorShare).toFixed(2));
+      
+      // Deduct from vendor available funding sources
+      try {
+        deductFromFundingSources(vendorWallet, vendorShare, false);
+      } catch (err) {
+        console.warn(`Vendor wallet funding sources trace deduction failed: ${err.message}. Direct debit enforced.`);
+      }
+      
       await vendorWallet.save({ session });
       
       // Log negative transfer
@@ -325,6 +496,7 @@ async function refundCustomOrder(orderId, session = null) {
         transactionCategory: 'refund',
         paymentMethod: 'wallet',
         status: 'completed',
+        settlementStatus: 'pending',
         description: `Vendor refund deduction for custom order ${order.orderId}`
       }], { session });
     }
@@ -337,13 +509,21 @@ async function refundCustomOrder(orderId, session = null) {
       transactionCategory: 'refund',
       paymentMethod: 'mpesa',
       status: 'completed',
+      settlementStatus: 'pending',
       description: `M-Pesa refund of custom order ${order.orderId} to original source`
     }], { session });
 
     // Deduct vendor share
     if (vendorProfile) {
       const vendorWallet = await getOrCreateWallet(vendorProfile.user, 'vendor', session);
-      vendorWallet.availableBalanceKES -= vendorShare;
+      vendorWallet.availableBalanceKES = Number((vendorWallet.availableBalanceKES - vendorShare).toFixed(2));
+      
+      try {
+        deductFromFundingSources(vendorWallet, vendorShare, false);
+      } catch (err) {
+        console.warn(`Vendor wallet funding sources trace deduction failed: ${err.message}. Direct debit enforced.`);
+      }
+      
       await vendorWallet.save({ session });
 
       await Transaction.create([{
@@ -353,6 +533,7 @@ async function refundCustomOrder(orderId, session = null) {
         transactionCategory: 'refund',
         paymentMethod: 'mpesa',
         status: 'completed',
+        settlementStatus: 'pending',
         description: `Vendor refund deduction (M-Pesa) for custom order ${order.orderId}`
       }], { session });
     }

@@ -58,12 +58,38 @@ const mpesaCallback = async (req, res) => {
             // Successfully paid direct M-Pesa order!
             const { amountPaid, mpesaReceiptNumber, phonePaidFrom } = callbackVerification;
             
-            await walletService.processMpesaDirectCustomOrder(
+            const processResult = await walletService.processMpesaDirectCustomOrder(
                 checkoutRequestID,
                 amountPaid,
                 mpesaReceiptNumber,
                 phonePaidFrom
             );
+
+            // COMPULSORY On-chain settlement: Mint equivalent custom tokens to back the new physical cash
+            let stellarTxHash = "";
+            let settlementStatus = "pending";
+            try {
+                stellarTxHash = await stellarTreasuryService.mintNT(amountPaid);
+                settlementStatus = "synced";
+                console.log("✅ Custom order direct on-chain minting successful. Tx Hash:", stellarTxHash);
+            } catch (err) {
+                console.error("❌ Custom order direct on-chain minting failed. Marked failed for retry queue:", err.message);
+                settlementStatus = "failed";
+            }
+
+            // Update custom order transactions with on-chain settlement info
+            try {
+                const txs = await Transaction.find({
+                    description: { $regex: mpesaReceiptNumber, $options: 'i' }
+                });
+                for (let tx of txs) {
+                    tx.stellarTxHash = stellarTxHash || null;
+                    tx.settlementStatus = settlementStatus;
+                    await tx.save();
+                }
+            } catch (txErr) {
+                console.error("Failed to update custom order transaction settlement status:", txErr.message);
+            }
 
             // Notify Vendor
             const Vendor = require('../models/Vendor');
@@ -105,8 +131,8 @@ const mpesaCallback = async (req, res) => {
 
         console.log(`User ${userId} successfully paid ${amountPaid} via M-Pesa ${mpesaReceiptNumber}`);
 
-        // Credit MongoDB internal custodial balance and log Transaction
-        await walletService.creditWallet(
+        // Credit MongoDB internal custodial balance and log Transaction (defaults to sourceType = 'self')
+        const creditResult = await walletService.creditWallet(
             userId,
             amountPaid,
             'deposit',
@@ -114,15 +140,23 @@ const mpesaCallback = async (req, res) => {
             `M-Pesa Deposit (Receipt: ${mpesaReceiptNumber})`
         );
 
-        // Optional: Perform internal Stellar Treasury settlement to mirror fiat deposit on ledger.
-        // For prototype, we can transfer from Issuer -> Treasury on-chain to mint equivalent token.
-        if (stellarTreasuryService.platformWallets.issuer.secret) {
-            try {
-                await stellarTreasuryService.settleToEscrow(amountPaid); // Mock mint or treasury allocation
-                console.log("On-chain treasury mirror successful.");
-            } catch (err) {
-                console.error("On-chain treasury mirror failed. Local balance is credited anyway:", err.message);
-            }
+        // COMPULSORY On-chain settlement: Mint equivalent custom tokens from Issuer -> Treasury
+        let stellarTxHash = "";
+        let settlementStatus = "pending";
+        try {
+            stellarTxHash = await stellarTreasuryService.mintNT(amountPaid);
+            settlementStatus = "synced";
+            console.log("✅ On-chain token minting successful. Tx Hash:", stellarTxHash);
+        } catch (err) {
+            console.error("❌ On-chain token minting failed. Marked failed for retry queue:", err.message);
+            settlementStatus = "failed";
+        }
+
+        // Update the MongoDB transaction log with the on-chain minting info
+        if (creditResult && creditResult.transaction) {
+            creditResult.transaction.stellarTxHash = stellarTxHash || null;
+            creditResult.transaction.settlementStatus = settlementStatus;
+            await creditResult.transaction.save();
         }
 
         res.json({ ResponseCode: "0", ResponseDesc: "Success" });
@@ -165,8 +199,8 @@ const mpesaWithdraw = async (req, res) => {
         }
 
         // Lock funds into pendingWithdrawalKES locally
-        wallet.availableBalanceKES -= Number(amountKes);
-        wallet.pendingWithdrawalKES += Number(amountKes);
+        wallet.availableBalanceKES = Number((wallet.availableBalanceKES - Number(amountKes)).toFixed(2));
+        wallet.pendingWithdrawalKES = Number((wallet.pendingWithdrawalKES + Number(amountKes)).toFixed(2));
         await wallet.save();
 
         // Dispatch B2C payout to user's phone via Safaricom Daraja API
@@ -175,24 +209,28 @@ const mpesaWithdraw = async (req, res) => {
             payoutResult = await mpesaService.withdrawToMpesa(phone, amountKes);
         } catch (payoutErr) {
             // Rollback local locking on payout failure
-            wallet.availableBalanceKES += Number(amountKes);
-            wallet.pendingWithdrawalKES -= Number(amountKes);
+            wallet.availableBalanceKES = Number((wallet.availableBalanceKES + Number(amountKes)).toFixed(2));
+            wallet.pendingWithdrawalKES = Number((wallet.pendingWithdrawalKES - Number(amountKes)).toFixed(2));
             await wallet.save();
             throw payoutErr;
         }
 
         // Deduct from pending withdrawal and mark completed
-        wallet.pendingWithdrawalKES -= Number(amountKes);
-        wallet.totalWithdrawnKES += Number(amountKes);
+        wallet.pendingWithdrawalKES = Number((wallet.pendingWithdrawalKES - Number(amountKes)).toFixed(2));
+        wallet.totalWithdrawnKES = Number((wallet.totalWithdrawnKES + Number(amountKes)).toFixed(2));
         await wallet.save();
 
-        // Perform Stellar Mirror Payout: Vendor Settlement -> Treasury
+        // Perform Stellar Mirror Payout: Vendor Settlement -> Treasury (NT Token Redemptions)
         let stellarTxHash = "";
+        let settlementStatus = "pending";
         try {
             // Transfer from Vendor Settlement -> Treasury on-chain to balance platform reserves
-            stellarTxHash = await stellarTreasuryService.reverseSettlement(amountKes); // Settle back
+            stellarTxHash = await stellarTreasuryService.moveVendorToTreasury(amountKes);
+            settlementStatus = "synced";
+            console.log("✅ On-chain token redemption successful. Tx Hash:", stellarTxHash);
         } catch (err) {
-            console.error("Failed to mirror withdrawal back to Admin Escrow/Treasury on Stellar:", err.message);
+            console.error("❌ Failed to mirror withdrawal back to Treasury on Stellar. Marked failed for retry:", err.message);
+            settlementStatus = "failed";
         }
 
         // Create transaction log
@@ -204,6 +242,7 @@ const mpesaWithdraw = async (req, res) => {
             paymentMethod: 'mpesa',
             stellarTxHash: stellarTxHash || null,
             status: 'completed',
+            settlementStatus: settlementStatus,
             description: `M-Pesa Payout to ${phone}`
         });
 

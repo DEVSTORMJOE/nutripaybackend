@@ -61,6 +61,11 @@ const transactionSchema = new mongoose.Schema({
     type: String,
     enum: ['pending', 'processing', 'completed', 'failed', 'reversed'],
     default: 'pending'
+  },
+  settlementStatus: {
+    type: String,
+    enum: ['pending', 'synced', 'failed'],
+    default: 'pending'
   }
 }, { timestamps: true });
 
