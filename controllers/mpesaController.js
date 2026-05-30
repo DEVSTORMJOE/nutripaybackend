@@ -183,7 +183,7 @@ const checkMpesaStatus = async (req, res) => {
     }
 }
 
-// M-Pesa B2C Payout (Withdrawal)
+// M-Pesa B2C Payout Request (Awaiting Admin Approval)
 const mpesaWithdraw = async (req, res) => {
     try {
         const { phone, amountKes } = req.body;
@@ -203,53 +203,22 @@ const mpesaWithdraw = async (req, res) => {
         wallet.pendingWithdrawalKES = Number((wallet.pendingWithdrawalKES + Number(amountKes)).toFixed(2));
         await wallet.save();
 
-        // Dispatch B2C payout to user's phone via Safaricom Daraja API
-        let payoutResult;
-        try {
-            payoutResult = await mpesaService.withdrawToMpesa(phone, amountKes);
-        } catch (payoutErr) {
-            // Rollback local locking on payout failure
-            wallet.availableBalanceKES = Number((wallet.availableBalanceKES + Number(amountKes)).toFixed(2));
-            wallet.pendingWithdrawalKES = Number((wallet.pendingWithdrawalKES - Number(amountKes)).toFixed(2));
-            await wallet.save();
-            throw payoutErr;
-        }
-
-        // Deduct from pending withdrawal and mark completed
-        wallet.pendingWithdrawalKES = Number((wallet.pendingWithdrawalKES - Number(amountKes)).toFixed(2));
-        wallet.totalWithdrawnKES = Number((wallet.totalWithdrawnKES + Number(amountKes)).toFixed(2));
-        await wallet.save();
-
-        // Perform Stellar Mirror Payout: Vendor Settlement -> Treasury (NT Token Redemptions)
-        let stellarTxHash = "";
-        let settlementStatus = "pending";
-        try {
-            // Transfer from Vendor Settlement -> Treasury on-chain to balance platform reserves
-            stellarTxHash = await stellarTreasuryService.moveVendorToTreasury(amountKes);
-            settlementStatus = "synced";
-            console.log("✅ On-chain token redemption successful. Tx Hash:", stellarTxHash);
-        } catch (err) {
-            console.error("❌ Failed to mirror withdrawal back to Treasury on Stellar. Marked failed for retry:", err.message);
-            settlementStatus = "failed";
-        }
-
-        // Create transaction log
-        await Transaction.create({
-            transactionId: crypto.randomUUID(),
-            fromUser: userId,
-            amountKES: amountKes,
-            transactionCategory: 'withdrawal',
-            paymentMethod: 'mpesa',
-            stellarTxHash: stellarTxHash || null,
-            status: 'completed',
-            settlementStatus: settlementStatus,
-            description: `M-Pesa Payout to ${phone}`
+        // Create withdrawal request in DB
+        const WithdrawalRequest = require('../models/WithdrawalRequest');
+        const request = await WithdrawalRequest.create({
+            user: userId,
+            amountKES: Number(amountKes),
+            phone: phone,
+            status: 'pending_approval'
         });
 
-        res.json({ message: `Successfully withdrew ${amountKes} KES to M-Pesa ${phone}.` });
+        res.json({ 
+            message: `Withdrawal request of ${amountKes} KES submitted successfully. It is now awaiting administrator approval.`,
+            requestId: request._id
+        });
     } catch (e) {
-        console.error("M-Pesa Withdraw error:", e);
-        res.status(500).json({ message: "Internal server error during payout: " + e.message });
+        console.error("M-Pesa Withdraw request error:", e);
+        res.status(500).json({ message: "Internal server error submitting withdrawal request: " + e.message });
     }
 }
 

@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { getDashboard, selectMeal, optOut, getDeliverySchedule, cancelDeliveries } = require('../controllers/studentController');
+const { getDashboard, selectMeal, optOut, getDeliverySchedule, cancelDeliveries, donateDelivery, getDonatedMeals, claimDonatedMeal, shuffleMeal } = require('../controllers/studentController');
 const { protect } = require('../middleware/authMiddleware');
 const { role } = require('../middleware/roleMiddleware');
 
@@ -9,5 +9,11 @@ router.get('/schedule', protect, role('student'), getDeliverySchedule);
 router.post('/select-meal', protect, role('student'), selectMeal);
 router.post('/opt-out', protect, role('student'), optOut);
 router.post('/cancel-deliveries', protect, role('student'), cancelDeliveries);
+router.post('/shuffle-meal', protect, role('student'), shuffleMeal);
+
+// Donation Box routes
+router.post('/donate', protect, role('student'), donateDelivery);
+router.get('/donated-meals', protect, role('student'), getDonatedMeals);
+router.post('/claim-meal', protect, role('student'), claimDonatedMeal);
 
 module.exports = router;

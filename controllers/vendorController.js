@@ -311,6 +311,29 @@ const deleteLocation = async (req, res) => {
   }
 };
 
+const submitMealForApproval = async (req, res) => {
+  const { id } = req.params;
+  try {
+    const vendorRecord = await Vendor.findOne({ user: req.user.id });
+    if (!vendorRecord) return res.status(404).json({ message: 'Vendor not found' });
+
+    const meal = await Meal.findOne({ _id: id, vendor: vendorRecord._id });
+    if (!meal) return res.status(404).json({ message: 'Meal not found' });
+
+    if (meal.approvalStatus !== 'draft' && meal.approvalStatus !== 'rejected') {
+      return res.status(400).json({ message: `Cannot submit a meal with status ${meal.approvalStatus}` });
+    }
+
+    meal.approvalStatus = 'pending';
+    await meal.save();
+
+    res.json({ message: "Meal submitted for approval successfully!", meal });
+  } catch (error) {
+    console.error("Submit Meal Error:", error);
+    res.status(500).json({ message: "Server Error" });
+  }
+};
+
 module.exports = {
   getDashboard,
   addLocation,
@@ -321,5 +344,6 @@ module.exports = {
   getOrders,
   updateOrderStatus,
   getDeliveryStaff,
-  registerDeliveryStaff
+  registerDeliveryStaff,
+  submitMealForApproval,
 };

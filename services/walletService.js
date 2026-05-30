@@ -2,6 +2,7 @@ const Wallet = require('../models/Wallet');
 const Transaction = require('../models/Transaction');
 const crypto = require('crypto');
 const paymentConfig = require('../config/paymentConfig');
+const DeliveryLocation = require('../models/DeliveryLocation');
 
 /**
  * Find or create a user wallet
@@ -433,6 +434,22 @@ async function processMpesaDirectCustomOrder(checkoutRequestID, amountPaid, mpes
     status: 'completed',
     settlementStatus: 'pending',
     description: `Direct M-Pesa checkout for order ${order.orderId} (Receipt: ${mpesaReceiptNumber})`
+  }], { session });
+
+  // 7. Create matching Delivery record for quick order
+  const Student = require('../models/Student');
+  const studentProfile = await Student.findOne({ user: order.user }).populate('deliveryLocation').session(session);
+  const Delivery = require('../models/Delivery');
+  await Delivery.create([{
+    student: order.user,
+    vendor: order.vendor,
+    items: order.items,
+    status: 'pending',
+    totalCost: order.totalCost,
+    timeSlot: 'Lunch',
+    scheduledDate: new Date(),
+    location: order.deliveryLocation || 'Campus',
+    deliveryLocation: studentProfile?.deliveryLocation?._id || null
   }], { session });
 
   return { order, vendorShare, commission };

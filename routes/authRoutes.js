@@ -66,6 +66,8 @@ const {
   changePassword,
   me,
   completeProfile,
+  sendSponsorOTP,
+  verifySponsorOTP
 } = require("../controllers/authController");
 
 const { protect } = require("../middleware/authMiddleware");
@@ -74,6 +76,8 @@ router.post("/register", register);
 router.post("/login", login);
 router.post("/firebase", firebaseAuth);
 router.post("/change-password", changePassword);
+router.post("/sponsor/send-otp", sendSponsorOTP);
+router.post("/sponsor/verify-otp", verifySponsorOTP);
 
 router.get("/me", protect, me);
 

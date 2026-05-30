@@ -30,8 +30,8 @@ const MealSchema = new mongoose.Schema(
     isActive: { type: Boolean, default: true },
     approvalStatus: {
       type: String,
-      enum: ['pending', 'approved', 'rejected'],
-      default: 'pending'
+      enum: ['draft', 'pending', 'approved', 'rejected', 'archived'],
+      default: 'draft'
     }
   },
   { timestamps: true }

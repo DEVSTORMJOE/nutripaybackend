@@ -29,6 +29,7 @@
 
 // server/controllers/mealController.js
 const Meal = require("../models/Meal");
+const WeeklyPlan = require("../models/WeeklyPlan");
 
 async function listMeals(req, res) {
   try {
@@ -163,4 +164,49 @@ async function deleteMeal(req, res) {
   }
 }
 
-module.exports = { listMeals, createMeal, updateMeal, setMealActive, deleteMeal };
+async function getWeeklyPlans(req, res) {
+  try {
+    const filter = {};
+    if (req.query.week) filter.week = Number(req.query.week);
+    if (req.query.planId) filter.planId = req.query.planId;
+
+    const plans = await WeeklyPlan.find(filter)
+      .populate('breakfast')
+      .populate('lunch')
+      .populate('supper')
+      .lean();
+    return res.json(plans);
+  } catch (e) {
+    return res.status(500).json({ message: "Failed to load weekly plans" });
+  }
+}
+
+async function shuffleWeeklyPlan(req, res) {
+  const { planId } = req.body;
+  try {
+    const Subscription = require('../models/Subscription');
+    const subscriberCount = await Subscription.countDocuments({ status: 'active', planId });
+    const threshold = Math.max(1, Math.floor(subscriberCount / 3));
+
+    const plans = await WeeklyPlan.find({ planId })
+      .populate('breakfast')
+      .populate('lunch')
+      .populate('supper')
+      .lean();
+
+    if (!plans.length) {
+      return res.status(404).json({ message: "Weekly plan not found." });
+    }
+
+    res.json({
+      success: true,
+      subscriberCount,
+      threshold,
+      timetable: plans
+    });
+  } catch (e) {
+    res.status(500).json({ message: "Failed to process shuffle verification: " + e.message });
+  }
+}
+
+module.exports = { listMeals, createMeal, updateMeal, setMealActive, deleteMeal, getWeeklyPlans, shuffleWeeklyPlan };

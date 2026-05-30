@@ -13,6 +13,7 @@ const getWalletBalance = async (req, res) => {
       availableBalanceKES: wallet.availableBalanceKES,
       lockedBalanceKES: wallet.lockedBalanceKES,
       pendingWithdrawalKES: wallet.pendingWithdrawalKES,
+      status: wallet.status || 'active',
       // Backwards compatibility for older UI/scripts
       balance: wallet.availableBalanceKES,
       publicKey: null // No longer exposing Stellar public key to users

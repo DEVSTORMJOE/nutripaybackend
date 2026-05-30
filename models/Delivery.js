@@ -25,7 +25,7 @@ const deliverySchema = new mongoose.Schema({
   }],
   status: {
     type: String,
-    enum: ['awaiting_sponsor', 'pending', 'preparing', 'ready', 'assigned', 'picked_up', 'delivered', 'failed', 'cancelled'],
+    enum: ['awaiting_sponsor', 'pending', 'preparing', 'ready', 'assigned', 'picked_up', 'delivered', 'failed', 'cancelled', 'donated'],
     default: 'pending'
   },
   totalCost: {
@@ -43,7 +43,21 @@ const deliverySchema = new mongoose.Schema({
     required: true
   },
   deliveredAt: Date,
-  location: String
+  location: String,
+  deliveryLocation: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'DeliveryLocation',
+    default: null
+  },
+  originalStudent: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User'
+  },
+  isDonated: {
+    type: Boolean,
+    default: false
+  },
+  claimedAt: Date
 }, { timestamps: true });
 
 const Delivery = mongoose.model('Delivery', deliverySchema);

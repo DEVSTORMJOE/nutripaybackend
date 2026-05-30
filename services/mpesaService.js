@@ -1,4 +1,5 @@
 const axios = require('axios');
+const crypto = require('crypto');
 require('dotenv').config();
 
 // Retrieve Token for Safaricom
@@ -32,7 +33,7 @@ const getSafaricomToken = async () => {
 /**
  * Initiate an STK Push deposit
  */
-async function initiateDeposit(userId, phone, amountKes) {
+async function initiateDeposit(userId, phone, amountKes, orderType = 'monthly_subscription') {
     const token = await getSafaricomToken();
     if (!token) {
         throw new Error("Failed to generate Safaricom Auth Token");
@@ -44,6 +45,9 @@ async function initiateDeposit(userId, phone, amountKes) {
     const password = Buffer.from(`${shortcode}${passkey}${timestamp}`).toString("base64");
     const callbackUrl = process.env.DARAJA_CALLBACK_URL || "https://mydomain.com/api/mpesa/callback";
 
+    const reference = orderType === 'quick_order' ? "NutriPay QuickOrder" : "NutriPay Subscription";
+    const desc = orderType === 'quick_order' ? "Quick Order Purchase" : "Monthly Subscription";
+
     const stkData = {
         BusinessShortCode: shortcode,
         Password: password,
@@ -54,8 +58,8 @@ async function initiateDeposit(userId, phone, amountKes) {
         PartyB: shortcode,   
         PhoneNumber: phone,  
         CallBackURL: `${callbackUrl}/${userId}`, 
-        AccountReference: "NutriPay Deposit",
-        TransactionDesc: "Wallet Funding"
+        AccountReference: reference,
+        TransactionDesc: desc
     };
 
     if (token === "mocked_token") {

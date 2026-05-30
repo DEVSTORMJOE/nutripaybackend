@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { getDashboard, approveMeal, getUsers, getPendingApprovals, approveVendor, getVendors, getWallets, getTransactions, createUser, updateUser, createVendor, getMeals, updateMealApproval, getOrders, getDeliveryStaff, approveDelivery } = require('../controllers/adminController');
+const { getDashboard, approveMeal, getUsers, getPendingApprovals, approveVendor, getVendors, getWallets, getTransactions, createUser, updateUser, createVendor, getMeals, updateMealApproval, getOrders, getDeliveryStaff, approveDelivery, getWeeklyPlans, updateWeeklyPlan, getWithdrawalRequests, handleWithdrawalRequest, assignLocationsToDriver } = require('../controllers/adminController');
 const { protect } = require('../middleware/authMiddleware');
 const { role } = require('../middleware/roleMiddleware');
 
@@ -20,5 +20,12 @@ router.patch('/meals/:id/approval', protect, role('admin'), updateMealApproval);
 router.get('/orders', protect, role('admin'), getOrders);
 router.get('/delivery-staff', protect, role('admin'), getDeliveryStaff);
 router.post('/approve/delivery', protect, role('admin'), approveDelivery);
+router.get('/weekly-plans', protect, role('admin'), getWeeklyPlans);
+router.post('/weekly-plans', protect, role('admin'), updateWeeklyPlan);
+router.post('/delivery/assign-locations', protect, role('admin'), assignLocationsToDriver);
+
+// Withdrawal Approval Routing
+router.get('/withdrawals', protect, role('admin'), getWithdrawalRequests);
+router.post('/withdrawals/:id/approve', protect, role('admin'), handleWithdrawalRequest);
 
 module.exports = router;

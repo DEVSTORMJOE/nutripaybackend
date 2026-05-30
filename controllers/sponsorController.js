@@ -5,6 +5,7 @@ const Delivery = require('../models/Delivery');
 const walletService = require('../services/walletService');
 const escrowService = require('../services/escrowService');
 const notificationService = require('../services/notificationService');
+const SponsorRequest = require('../models/SponsorRequest');
 
 // @desc    Get sponsor dashboard stats
 // @route   GET /api/sponsor/dashboard
@@ -218,10 +219,114 @@ const fundRequest = async (req, res) => {
   }
 };
 
+const getRequestDetails = async (req, res) => {
+  try {
+    const { token } = req.params;
+    const request = await SponsorRequest.findOne({ token }).populate('student', 'name email');
+    if (!request) return res.status(404).json({ message: "Sponsorship request not found." });
+    
+    res.json({
+      studentName: request.student?.name,
+      studentEmail: request.student?.email,
+      amountKES: request.amountKES,
+      deliveryCount: request.deliveryIds?.length || 0,
+      status: request.status,
+      sponsorEmail: request.sponsorEmail
+    });
+  } catch (e) {
+    res.status(500).json({ message: "Server error resolving request." });
+  }
+};
+
+const quickPay = async (req, res) => {
+  const { token } = req.body;
+  try {
+    const request = await SponsorRequest.findOne({ token, status: 'pending' });
+    if (!request) return res.status(404).json({ message: "Active sponsorship request not found." });
+
+    // Let's resolve sponsor User account or create if missing
+    let sponsor = await User.findOne({ email: request.sponsorEmail });
+    if (!sponsor) {
+      sponsor = await User.create({
+        name: request.sponsorName,
+        email: request.sponsorEmail,
+        role: 'sponsor',
+        isApproved: true
+      });
+      
+      // Credit mock funds
+      await walletService.creditWallet(
+        sponsor._id,
+        10000,
+        'deposit',
+        'wallet',
+        'Sponsor Mock Funding'
+      );
+    }
+
+    const sponsorId = sponsor._id;
+    const studentId = request.student;
+    const totalKes = request.amountKES;
+    const deliveryIds = request.deliveryIds;
+
+    // Credit sponsor if they have insufficient balance
+    const sponsorWallet = await Wallet.findOne({ user: sponsorId });
+    if (!sponsorWallet || sponsorWallet.availableBalanceKES < totalKes) {
+      await walletService.creditWallet(
+        sponsorId,
+        totalKes,
+        'deposit',
+        'wallet',
+        'Auto Sponsor Funding for Quick Checkout'
+      );
+    }
+
+    // 1. Debit Sponsor
+    await walletService.debitWallet(
+      sponsorId,
+      totalKes,
+      'funding',
+      'wallet',
+      `Subscription quick sponsor funding for student: ${studentId}`
+    );
+
+    // 2. Credit Student available balance
+    const creditRes = await walletService.creditWallet(
+      studentId,
+      totalKes,
+      'funding',
+      'wallet',
+      `Sponsor request funding from sponsor: ${sponsorId}`
+    );
+    creditRes.transaction.paymentSource = 'sponsor_funds';
+    await creditRes.transaction.save();
+
+    // 3. Immediately lock subscription funds
+    const lockResult = await escrowService.lockSubscriptionFunds(studentId, totalKes, sponsorId);
+
+    // Update Deliveries status to pending
+    await Delivery.updateMany({ _id: { $in: deliveryIds } }, { $set: { status: 'pending' } });
+    
+    // Update SponsorRequest status
+    request.status = 'paid';
+    await request.save();
+
+    res.json({
+      success: true,
+      message: "Sponsorship payment completed successfully!"
+    });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ message: "Quick pay failed: " + e.message });
+  }
+};
+
 module.exports = {
   getDashboard,
   fundStudentWallet,
   getSponsoredStudents,
   getPendingRequests,
-  fundRequest
+  fundRequest,
+  getRequestDetails,
+  quickPay
 };

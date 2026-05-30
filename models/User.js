@@ -248,6 +248,14 @@ const userSchema = new mongoose.Schema(
         ref: "User",
       },
     ],
+    otpCode: {
+      type: String,
+      default: null,
+    },
+    otpExpiry: {
+      type: Date,
+      default: null,
+    },
   },
   { timestamps: true }
 );

@@ -11,11 +11,12 @@ const deliveryPersonnelSchema = new mongoose.Schema(
       index: true,
     },
 
-    assignedVendor: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "Vendor",
-      default: null,
-    },
+    assignedLocations: [
+      {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "DeliveryLocation",
+      }
+    ],
 
     serviceArea: {
       type: String,

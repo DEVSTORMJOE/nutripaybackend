@@ -157,9 +157,16 @@ function fmtMoneyKes(amount) {
 // @access  Private (Delivery)
 const getAssignedDeliveries = async (req, res) => {
   try {
+    const DeliveryPersonnel = require("../models/DeliveryPersonnel");
+    const driver = await DeliveryPersonnel.findOne({ user: req.user.id });
+    const assignedLocationIds = driver ? driver.assignedLocations || [] : [];
+
     const deliveries = await Delivery.find({
-      deliveryAgent: req.user.id,
-      status: { $ne: "delivered" },
+      $or: [
+        { deliveryAgent: req.user.id },
+        { deliveryLocation: { $in: assignedLocationIds } }
+      ],
+      status: { $nin: ["delivered", "cancelled", "failed"] }
     })
       // ✅ include phone so SMS routing can work (non-breaking)
       .populate("student", "name email phone")
@@ -182,10 +189,16 @@ const markDelivered = async (req, res) => {
   const { deliveryId } = req.body;
 
   try {
-    // ✅ keep logic, just populate student/vendor.user for SMS
+    const DeliveryPersonnel = require("../models/DeliveryPersonnel");
+    const driver = await DeliveryPersonnel.findOne({ user: req.user.id });
+    const assignedLocationIds = driver ? driver.assignedLocations || [] : [];
+
     const delivery = await Delivery.findOne({
       _id: deliveryId,
-      deliveryAgent: req.user.id,
+      $or: [
+        { deliveryAgent: req.user.id },
+        { deliveryLocation: { $in: assignedLocationIds } }
+      ]
     })
       .populate("student", "name email phone")
       .populate({
@@ -194,6 +207,9 @@ const markDelivered = async (req, res) => {
       });
 
     if (!delivery) return res.status(404).json({ message: "Delivery not found" });
+
+    // Link the completing driver
+    delivery.deliveryAgent = req.user.id;
 
     const wasAlreadyDelivered = delivery.status === "delivered";
 

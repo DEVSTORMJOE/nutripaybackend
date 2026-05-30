@@ -8,6 +8,7 @@ const crypto = require("crypto");
 const { sendMail } = require("../utils/mailer");
 const walletService = require("../services/walletService");
 const escrowService = require("../services/escrowService");
+const SponsorRequest = require("../models/SponsorRequest");
 
 async function getCart(req, res) {
   try {
@@ -217,7 +218,6 @@ async function addSponsorCheckout(req, res) {
         role: "sponsor",
       });
       
-      // Initialize internal custodial sponsor wallet with 10,000 KES mock signup balance
       await walletService.creditWallet(
         sponsor._id,
         10000,
@@ -247,23 +247,36 @@ async function addSponsorCheckout(req, res) {
       subtotalKes += (main + drink + fruit) * qty;
     }
 
+    // Generate secure sponsorship token
+    const token = crypto.randomBytes(32).toString("hex");
+    const frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000";
+    const paymentLink = `${frontendUrl}/sponsor-pay?token=${token}`;
+
     let emailHtml = `
-      <div style="font-family: sans-serif; color: #333;">
-        <h2>NutriPay - Student Meal Request</h2>
+      <div style="font-family: sans-serif; color: #333; max-width: 600px; margin: 0 auto; border: 1px solid #eee; padding: 20px;">
+        <h2 style="color: #f81d1d; border-bottom: 2px solid #f81d1d; padding-bottom: 10px;">NutriPay - Student Meal Request</h2>
         <p>Hello ${sponsorName},</p>
         <p>A student has requested you to sponsor their meals totaling <strong>${subtotalKes} KES</strong>.</p>
+        <p>Please click the button below to verify and complete this sponsorship payment securely:</p>
+        <div style="text-align: center; margin: 25px 0;">
+          <a href="${paymentLink}" style="background-color: #f81d1d; color: white; padding: 12px 30px; text-decoration: none; font-weight: bold; display: inline-block;">APPROVE & SPONSOR NOW</a>
+        </div>
     `;
 
     if (isNewSponsor) {
         emailHtml += `
-          <p>An account has been automatically created for you. Login with the following credentials to review and fund this request:</p>
-          <p><strong>Username / Email:</strong> ${sponsorEmail}</p>
-          <p><strong>One-Time Password:</strong> ${generatedPassword}</p>
-          <p><em>Please ensure you change your password immediately upon logging in for security purposes.</em></p>
+          <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; padding: 15px; margin-top: 20px;">
+            <h4 style="margin-top: 0; color: #0b1220;">Your Sponsor Account Credentials</h4>
+            <p style="margin: 5px 0; font-size: 13px;"><strong>Username / Email:</strong> ${sponsorEmail}</p>
+            <p style="margin: 5px 0; font-size: 13px;"><strong>One-Time Password:</strong> ${generatedPassword}</p>
+            <p style="margin: 10px 0 0 0; font-size: 12px; color: #64748b; font-style: italic;">
+              You can log in via OTP at any time to monitor transactions and manage linked students.
+            </p>
+          </div>
         `;
     } else {
         emailHtml += `
-          <p>Please log into your existing NutriPay Sponsor account to review and fund this request.</p>
+          <p>You can also log in to your existing Sponsor account using OTP to manage your active student sponsorships.</p>
         `;
     }
 
@@ -272,7 +285,7 @@ async function addSponsorCheckout(req, res) {
     try {
       await sendMail({
         to: sponsorEmail,
-        subject: "NutriPay - Student Meal Request",
+        subject: "NutriPay - Secure Student Meal Request",
         html: emailHtml,
       });
       console.log(`[EMAIL SENT] To: ${sponsorEmail}`);
@@ -321,7 +334,7 @@ async function addSponsorCheckout(req, res) {
         deliveriesToInsert.push({
           student: userId,
           vendor: vId,
-          sponsor: sponsor._id, // LINK THE SPONSOR HERE
+          sponsor: sponsor._id, 
           items: group.items,
           status: 'awaiting_sponsor',
           totalCost: group.totalCost,
@@ -332,9 +345,22 @@ async function addSponsorCheckout(req, res) {
       }
     }
     
+    let createdDeliveryIds = [];
     if (deliveriesToInsert.length > 0) {
-      await Delivery.insertMany(deliveriesToInsert);
+      const inserted = await Delivery.insertMany(deliveriesToInsert);
+      createdDeliveryIds = inserted.map(d => d._id);
     }
+
+    // Save the SponsorRequest
+    await SponsorRequest.create({
+      token,
+      sponsorEmail,
+      sponsorName,
+      student: userId,
+      deliveryIds: createdDeliveryIds,
+      amountKES: subtotalKes,
+      status: 'pending'
+    });
 
     await Cart.findOneAndUpdate({ user: userId }, { schedule: {} });
 
@@ -348,4 +374,97 @@ async function addSponsorCheckout(req, res) {
   }
 }
 
-module.exports = { getCart, replaceCart, clearCart, checkoutCart, addSponsorCheckout };
+async function customPlanCheckout(req, res) {
+  const { daysCount, breakfast, lunch, supper, totalCost } = req.body;
+  try {
+    const userId = req.user.id;
+    if (!daysCount || daysCount <= 0) {
+      return res.status(400).json({ message: "Days count must be greater than 0" });
+    }
+    if (!breakfast && !lunch && !supper) {
+      return res.status(400).json({ message: "At least one meal slot must be selected" });
+    }
+    if (!totalCost || totalCost <= 0) {
+      return res.status(400).json({ message: "Total cost must be greater than 0" });
+    }
+
+    // 1. Lock subscription funds using the Escrow Service
+    const lockResult = await escrowService.lockSubscriptionFunds(userId, totalCost, null);
+
+    // 2. Create the Custom Subscriptions in MongoDB
+    const Student = require('../models/Student');
+    const studentProfile = await Student.findOne({ user: userId }).populate('deliveryLocation');
+    
+    // Save student subscription state
+    studentProfile.subscriptionActive = true;
+    await studentProfile.save();
+
+    // Create an active Subscription record
+    const Subscription = require('../models/Subscription');
+    const today = new Date();
+    const endDate = new Date(today.getTime() + daysCount * 24 * 60 * 60 * 1000);
+    const subscription = await Subscription.create({
+      student: userId,
+      planId: 'custom',
+      status: 'active',
+      startDate: today,
+      endDate: endDate,
+      totalPaidKES: totalCost
+    });
+
+    // 3. Schedule the custom deliveries day by day
+    const Delivery = require('../models/Delivery');
+    const Meal = require('../models/Meal');
+    
+    // Find default approved meals
+    const approvedMeals = await Meal.find({ approvalStatus: 'approved' }).lean();
+    if (approvedMeals.length === 0) {
+      return res.status(400).json({ message: "No approved meals available in the system yet." });
+    }
+    const defaultMeal = approvedMeals[0];
+    const defaultVendor = defaultMeal.vendor;
+
+    const slots = [];
+    if (breakfast) slots.push('Breakfast');
+    if (lunch) slots.push('Lunch');
+    if (supper) slots.push('Supper');
+
+    const deliveriesToInsert = [];
+    for (let dayOffset = 0; dayOffset < daysCount; dayOffset++) {
+      const scheduledDate = new Date(today.getTime() + dayOffset * 24 * 60 * 60 * 1000);
+      for (const slot of slots) {
+        const matchingMeal = approvedMeals.find(m => m.category === (slot === 'Breakfast' ? 'drink' : 'main')) || defaultMeal;
+        deliveriesToInsert.push({
+          student: userId,
+          vendor: matchingMeal.vendor || defaultVendor,
+          items: [{ name: matchingMeal.name, quantity: 1 }],
+          status: 'pending',
+          totalCost: Number(matchingMeal.price || 150),
+          timeSlot: slot,
+          scheduledDate: scheduledDate,
+          location: studentProfile?.deliveryLocation ? studentProfile.deliveryLocation.hostelResidence || 'Campus' : 'Campus',
+          deliveryLocation: studentProfile?.deliveryLocation?._id || null
+        });
+      }
+    }
+
+    if (deliveriesToInsert.length > 0) {
+      await Delivery.insertMany(deliveriesToInsert);
+    }
+
+    // 4. Clear Cart
+    const CartModel = require('../models/Cart');
+    await CartModel.findOneAndUpdate({ user: userId }, { schedule: {} });
+
+    res.json({
+      success: true,
+      message: "Custom Monthly Plan built and checkout completed successfully!",
+      subscription
+    });
+  } catch (error) {
+    console.error("Custom plan checkout failed:", error);
+    res.status(500).json({ message: "Custom plan checkout failed: " + error.message });
+  }
+}
+
+module.exports = { getCart, replaceCart, clearCart, checkoutCart, addSponsorCheckout, customPlanCheckout };

@@ -2802,6 +2802,101 @@ async function changePassword(req, res) {
   }
 }
 
+async function sendSponsorOTP(req, res) {
+  const { email } = req.body;
+  try {
+    const cleanEmail = email?.trim().toLowerCase();
+    if (!cleanEmail) return res.status(400).json({ message: "Email is required." });
+
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    const otpExpiry = new Date(Date.now() + 10 * 60 * 1000); 
+
+    let user = await User.findOne({ email: cleanEmail });
+    if (!user) {
+      user = await User.create({
+        name: "Sponsor",
+        email: cleanEmail,
+        role: "sponsor",
+        isApproved: true
+      });
+      
+      const Sponsor = require('../models/Sponsor');
+      await Sponsor.create({
+        user: user._id,
+        organizationName: "Sponsor",
+        contactPhone: ""
+      });
+    }
+
+    if (user.role !== 'sponsor') {
+      return res.status(403).json({ message: "This email is associated with a non-sponsor account." });
+    }
+
+    user.otpCode = otp;
+    user.otpExpiry = otpExpiry;
+    await user.save();
+
+    const { sendMail } = require("../utils/mailer");
+    await sendMail({
+      to: cleanEmail,
+      subject: "NutriPay Sponsor Portal - Verification Code",
+      html: `
+        <div style="font-family: sans-serif; color: #333; max-width: 500px; margin: 0 auto; border: 1px solid #ddd; padding: 25px; text-align: center;">
+          <h2 style="color: #f81d1d; border-bottom: 2px solid #f81d1d; padding-bottom: 10px; margin-top: 0;">NutriPay Verification Code</h2>
+          <p>Your secure verification code to access your sponsor dashboard is:</p>
+          <div style="font-size: 32px; font-weight: 800; letter-spacing: 5px; color: #0b1220; margin: 20px 0; background-color: #f8fafc; padding: 15px; border: 1px dashed #ccc;">
+            ${otp}
+          </div>
+          <p style="font-size: 12px; color: #666; margin-bottom: 0;">This code is valid for 10 minutes. Do not share this code with anyone.</p>
+        </div>
+      `
+    });
+
+    res.json({ success: true, message: "Verification code sent successfully!" });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ message: "Failed to send OTP: " + e.message });
+  }
+}
+
+async function verifySponsorOTP(req, res) {
+  const { email, otp } = req.body;
+  try {
+    const cleanEmail = email?.trim().toLowerCase();
+    if (!cleanEmail || !otp) return res.status(400).json({ message: "Email and OTP are required." });
+
+    const user = await User.findOne({ email: cleanEmail });
+    if (!user) return res.status(404).json({ message: "User not found." });
+
+    if (user.role !== 'sponsor') {
+      return res.status(403).json({ message: "Unauthorized account role." });
+    }
+
+    if (!user.otpCode || user.otpCode !== otp || !user.otpExpiry || user.otpExpiry < new Date()) {
+      return res.status(400).json({ message: "Invalid or expired verification code." });
+    }
+
+    user.otpCode = null;
+    user.otpExpiry = null;
+    await user.save();
+
+    const token = signToken(user._id);
+
+    const roleProfile = await getRoleProfile(user);
+    const nav = buildNavigation(user, roleProfile);
+
+    res.json({
+      token,
+      user: publicUser(user),
+      profileStatus: nav.profileStatus,
+      navigation: nav.navigation
+    });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ message: "Verification failed." });
+  }
+}
+
 module.exports = {
   register,
   login,
@@ -2809,4 +2904,6 @@ module.exports = {
   changePassword,
   me,
   completeProfile,
+  sendSponsorOTP,
+  verifySponsorOTP
 };

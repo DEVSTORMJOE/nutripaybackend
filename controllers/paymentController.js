@@ -133,6 +133,22 @@ const createCustomOrder = async (req, res) => {
         deliveryLocation: deliveryLocation || user.location || 'Campus'
       });
 
+      // Inherit student hostel DeliveryLocation and create immediate Delivery record
+      const Student = require('../models/Student');
+      const studentProfile = await Student.findOne({ user: user._id }).populate('deliveryLocation');
+      const Delivery = require('../models/Delivery');
+      await Delivery.create({
+        student: user._id,
+        vendor: targetVendorId,
+        items: items,
+        status: 'pending',
+        totalCost: totalCost,
+        timeSlot: 'Lunch', // Default quick order timeslot
+        scheduledDate: new Date(),
+        location: deliveryLocation || user.location || 'Campus',
+        deliveryLocation: studentProfile?.deliveryLocation?._id || null
+      });
+
       // Notify Vendor
       const Notification = require('../models/Notification');
       await Notification.create({
@@ -173,47 +189,10 @@ const createCustomOrder = async (req, res) => {
         deliveryLocation: deliveryLocation || user.location || 'Campus'
       });
 
-      // Trigger PayHero STK Push
-      const authHeader = process.env.BASIC_AUTH_TOKEN;
-      const channelId = process.env.PAYHERO_CHANNEL_ID;
-
-      if (authHeader && channelId) {
-        const baseUrl = process.env.PAYHERO_CALLBACK_URL || 'https://nutripaybackend.onrender.com';
-        const callbackUrl = `${baseUrl}/api/payhero/callback/${user ? user._id : 'guest'}`;
-
-        const payload = {
-            amount: Number(totalCost),
-            phone_number: pushPhone,
-            channel_id: Number(channelId),
-            provider: "m-pesa",
-            external_reference: reference,
-            callback_url: callbackUrl
-        };
-
-        try {
-          const response = await axios.post(
-              "https://backend.payhero.co.ke/api/v2/payments",
-              payload,
-              { headers: { "Content-Type": "application/json", "Authorization": authHeader } }
-          );
-
-          if (response.data && response.data.success) {
-            return res.json({
-              success: true,
-              message: "STK Push sent successfully via PayHero! Check your phone...",
-              reference,
-              orderId
-            });
-          }
-        } catch (err) {
-          console.error("PayHero direct order STK Push error:", err.message);
-        }
-      }
-
-      // Fallback: Safaricom Direct Sandbox STK Push
+      // Safaricom Direct Sandbox STK Push
       const mpesaService = require('../services/mpesaService');
       try {
-        const data = await mpesaService.initiateDeposit(user ? user._id : 'guest', pushPhone, totalCost);
+        const data = await mpesaService.initiateDeposit(user ? user._id : 'guest', pushPhone, totalCost, 'quick_order');
         const safaricomID = data.CheckoutRequestID;
         customOrder.checkoutRequestID = safaricomID;
         await customOrder.save();
@@ -228,7 +207,7 @@ const createCustomOrder = async (req, res) => {
         console.error("Direct Safaricom STK Push error:", err.message);
       }
 
-      // Mock checkoutRequestID for demo/prototype mode if both APIs are unavailable
+      // Mock checkoutRequestID for demo/prototype mode if Safaricom API is unavailable
       const mockID = `ws_CO_Mock_${crypto.randomBytes(8).toString('hex')}`;
       customOrder.checkoutRequestID = mockID;
       await customOrder.save();

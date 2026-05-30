@@ -251,6 +251,30 @@ const studentSchema = new mongoose.Schema(
       type: Number,
       default: 0,
     },
+    cancelledBreakfastCount: {
+      type: Number,
+      default: 0,
+    },
+    cancelledLunchCount: {
+      type: Number,
+      default: 0,
+    },
+    cancelledSupperCount: {
+      type: Number,
+      default: 0,
+    },
+    cancellationResetMonth: {
+      type: Number,
+      default: () => new Date().getMonth(),
+    },
+    shufflesCount: {
+      type: Number,
+      default: 0,
+    },
+    lastShuffleDate: {
+      type: Date,
+      default: null,
+    },
   },
   { timestamps: true }
 );
