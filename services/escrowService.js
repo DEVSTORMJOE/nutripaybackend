@@ -60,9 +60,15 @@ async function releaseDailyVendorPayment(deliveryId, session = null) {
   const totalCost = Number(delivery.totalCost || 0);
   if (totalCost <= 0) return { freeOrder: true };
 
-  // Calculate split based on configurable PLATFORM_COMMISSION_PERCENT (default 10%)
-  const commissionPercent = Number(process.env.PLATFORM_COMMISSION_PERCENT || 10) / 100;
-  const commission = Number((totalCost * commissionPercent).toFixed(2));
+  const vendorProfile = await Vendor.findById(delivery.vendor).session(session);
+  if (!vendorProfile) throw new Error("Vendor profile not found");
+
+  // Calculate split based on dynamic vendor commission settings
+  const vendorCommission = vendorProfile.vendorCommissionPercent !== undefined ? vendorProfile.vendorCommissionPercent : 90;
+  const platformCommission = vendorProfile.platformCommissionPercent !== undefined ? vendorProfile.platformCommissionPercent : 10;
+  const commissionRate = platformCommission / 100;
+
+  const commission = Number((totalCost * commissionRate).toFixed(2));
   const vendorShare = Number((totalCost - commission).toFixed(2));
 
   console.log(`[Escrow Service] Releasing daily payout for Delivery: ${deliveryId}. Cost: ${totalCost} KES. Vendor Share: ${vendorShare}, Commission: ${commission}`);
@@ -77,9 +83,6 @@ async function releaseDailyVendorPayment(deliveryId, session = null) {
   await studentWallet.save({ session });
 
   // 2. Credit Vendor wallet available balance and funding sources
-  const vendorProfile = await Vendor.findById(delivery.vendor).session(session);
-  if (!vendorProfile) throw new Error("Vendor profile not found");
-  
   const vendorWallet = await walletService.creditWallet(
     vendorProfile.user,
     vendorShare,
@@ -151,7 +154,11 @@ async function releaseDailyVendorPayment(deliveryId, session = null) {
  * Refund undelivered/cancelled subscription meals from Escrow -> Treasury on Stellar (NT), and credit KES locally
  */
 async function calculateRefund(deliveryIds, studentId, session = null) {
-  const deliveries = await Delivery.find({ _id: { $in: deliveryIds }, status: 'pending', student: studentId }).session(session);
+  const deliveries = await Delivery.find({
+    _id: { $in: deliveryIds },
+    status: { $in: ['pending', 'assigned', 'preparing', 'ready', 'cancelled'] },
+    student: studentId
+  }).session(session);
   if (deliveries.length === 0) return { refundedKES: 0 };
 
   let totalRefundToSponsor = 0;
@@ -172,16 +179,25 @@ async function calculateRefund(deliveryIds, studentId, session = null) {
 
   console.log(`[Escrow Service] Subscription refund for student ${studentId}. Total: ${totalRefundKes} KES. Sponsor Portion: ${totalRefundToSponsor}, Student Portion: ${totalRefundToStudent}`);
 
-  // Deduct student locked balance
-  const studentWallet = await Wallet.findOne({ user: studentId }).session(session);
-  if (!studentWallet || studentWallet.lockedBalanceKES < totalRefundKes) {
-    throw new Error("Student locked balance is insufficient to process this refund");
+  // Deduct from student lockedBalanceKES and credit availableBalanceKES
+  // For self-funded portion: refund goes to student wallet via refundFunds()
+  // For sponsor-funded portion: deduct from student locked, credit sponsor wallet
+  if (totalRefundToStudent > 0) {
+    // walletService.refundFunds now correctly: locked -= amount, available += amount
+    await walletService.refundFunds(studentId, totalRefundToStudent, 'refund', 'self', session);
   }
-  studentWallet.lockedBalanceKES = Number((studentWallet.lockedBalanceKES - totalRefundKes).toFixed(2));
-  await studentWallet.save({ session });
 
-  // Credit funder available balance locally (uses creditWallet which handles funding sources and NT balance update)
+  // For sponsor-funded portion: deduct locked from student, credit sponsor's available
   if (totalRefundToSponsor > 0 && sponsorId) {
+    // Manually deduct from student lockedBalanceKES (sponsor portion)
+    const studentWallet = await Wallet.findOne({ user: studentId }).session(session);
+    if (!studentWallet || studentWallet.lockedBalanceKES < totalRefundToSponsor) {
+      throw new Error("Student locked balance is insufficient to process sponsor refund portion");
+    }
+    studentWallet.lockedBalanceKES = Number((studentWallet.lockedBalanceKES - totalRefundToSponsor).toFixed(2));
+    await studentWallet.save({ session });
+
+    // Credit sponsor's available balance (sponsor wallet has no locked funds)
     await walletService.creditWallet(
       sponsorId,
       totalRefundToSponsor,
@@ -189,20 +205,6 @@ async function calculateRefund(deliveryIds, studentId, session = null) {
       'wallet',
       `Refund for opted-out student pending deliveries`,
       'sponsor',
-      false,
-      'none',
-      session
-    );
-  }
-
-  if (totalRefundToStudent > 0) {
-    await walletService.creditWallet(
-      studentId,
-      totalRefundToStudent,
-      'refund',
-      'wallet',
-      `Refund for cancelled deliveries`,
-      'self',
       false,
       'none',
       session

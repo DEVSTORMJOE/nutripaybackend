@@ -8,16 +8,22 @@ const subscriptionSchema = new mongoose.Schema({
   },
   meal: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'Meal',
-    required: true
+    ref: 'Meal'
   },
   sponsor: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User'
   },
   dailyCost: {
+    type: Number
+  },
+  planId: {
+    type: String,
+    default: 'essential'
+  },
+  totalPaidKES: {
     type: Number,
-    required: true
+    default: 0
   },
   startDate: {
     type: Date,

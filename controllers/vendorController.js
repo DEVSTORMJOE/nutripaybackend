@@ -334,6 +334,49 @@ const submitMealForApproval = async (req, res) => {
   }
 };
 
+// @desc    Get order changes & cancellations for vendor
+// @route   GET /api/vendor/orders/meal-changes
+// @access  Private (Vendor)
+const getOrderChangesLog = async (req, res) => {
+  try {
+    const vendorRecord = await Vendor.findOne({ user: req.user.id });
+    if (!vendorRecord) return res.status(404).json({ message: 'Vendor not found' });
+
+    const MealChangeLog = require('../models/MealChangeLog');
+    
+    // Fetch meal changes where the delivery is for this vendor
+    const mealChanges = await MealChangeLog.find()
+      .populate({
+        path: 'deliveryId',
+        match: { vendor: vendorRecord._id },
+        select: 'scheduledDate timeSlot location items totalCost'
+      })
+      .populate('student', 'name email')
+      .sort({ createdAt: -1 })
+      .lean();
+      
+    // Filter out meal changes where the delivery was not for this vendor
+    const vendorMealChanges = mealChanges.filter(c => c.deliveryId !== null && c.deliveryId !== undefined);
+
+    // Fetch cancelled deliveries for this vendor
+    const cancelledDeliveries = await Delivery.find({
+      vendor: vendorRecord._id,
+      status: 'cancelled'
+    })
+    .populate('student', 'name email')
+    .sort({ updatedAt: -1 })
+    .lean();
+
+    res.json({
+      mealChanges: vendorMealChanges,
+      cancellations: cancelledDeliveries
+    });
+  } catch (error) {
+    console.error("Get Order Changes Log Error:", error);
+    res.status(500).json({ message: "Failed to load vendor activity log" });
+  }
+};
+
 module.exports = {
   getDashboard,
   addLocation,
@@ -346,4 +389,6 @@ module.exports = {
   getDeliveryStaff,
   registerDeliveryStaff,
   submitMealForApproval,
+  getOrderChangesLog,
 };
+

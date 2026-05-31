@@ -6,7 +6,9 @@ const Transaction = require('../models/Transaction');
 const Delivery = require('../models/Delivery');
 const WeeklyPlan = require('../models/WeeklyPlan');
 const WithdrawalRequest = require('../models/WithdrawalRequest');
+const RefundRequest = require('../models/RefundRequest');
 const walletService = require('../services/walletService');
+const escrowService = require('../services/escrowService');
 const mpesaService = require('../services/mpesaService');
 const stellarTreasuryService = require('../services/stellarTreasuryService');
 const crypto = require('crypto');
@@ -496,10 +498,12 @@ const getDeliveryStaff = async (req, res) => {
 
     // Fetch delivery personnel profiles
     const DeliveryPersonnel = require('../models/DeliveryPersonnel');
-    const deliveryProfiles = await DeliveryPersonnel.find({ user: { $in: drivers.map(d => d._id) } }).lean();
+    const deliveryProfiles = await DeliveryPersonnel.find({ user: { $in: drivers.map(d => d._id) } }).populate('assignedLocations').lean();
     const deliveryProfileMap = {};
+    const deliveryLocationsMap = {};
     for (const dp of deliveryProfiles) {
       deliveryProfileMap[dp.user.toString()] = dp.approvedStatus;
+      deliveryLocationsMap[dp.user.toString()] = dp.assignedLocations || [];
     }
 
     const mappedDrivers = drivers.map(d => ({
@@ -509,7 +513,8 @@ const getDeliveryStaff = async (req, res) => {
       phone: d.phone || "Not Provided",
       status: assignedDriverIds.includes(d._id.toString()) ? "Assigned" : "Available",
       approvedStatus: deliveryProfileMap[d._id.toString()] || (d.isApproved ? "approved" : "pending"),
-      vendorName: driverVendorMap[d._id.toString()] || "No Vendor Assigned"
+      vendorName: driverVendorMap[d._id.toString()] || "No Vendor Assigned",
+      assignedLocations: deliveryLocationsMap[d._id.toString()] || []
     }));
 
     res.json(mappedDrivers);
@@ -738,6 +743,268 @@ const assignLocationsToDriver = async (req, res) => {
   }
 };
 
+const getSettings = async (req, res) => {
+  try {
+    const SystemSettings = require('../models/SystemSettings');
+    let essential = await SystemSettings.findOne({ key: 'essential_price' });
+    if (!essential) essential = await SystemSettings.create({ key: 'essential_price', value: 3500 });
+    let elite = await SystemSettings.findOne({ key: 'elite_price' });
+    if (!elite) elite = await SystemSettings.create({ key: 'elite_price', value: 4500 });
+    let ultimate = await SystemSettings.findOne({ key: 'ultimate_price' });
+    if (!ultimate) ultimate = await SystemSettings.create({ key: 'ultimate_price', value: 6000 });
+    
+    res.json({
+      essential_price: essential.value,
+      elite_price: elite.value,
+      ultimate_price: ultimate.value
+    });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ message: "Failed to get system settings." });
+  }
+};
+
+const updateSettings = async (req, res) => {
+  const { essential_price, elite_price, ultimate_price } = req.body;
+  try {
+    const SystemSettings = require('../models/SystemSettings');
+    if (essential_price !== undefined) await SystemSettings.findOneAndUpdate({ key: 'essential_price' }, { value: Number(essential_price) }, { upsert: true });
+    if (elite_price !== undefined) await SystemSettings.findOneAndUpdate({ key: 'elite_price' }, { value: Number(elite_price) }, { upsert: true });
+    if (ultimate_price !== undefined) await SystemSettings.findOneAndUpdate({ key: 'ultimate_price' }, { value: Number(ultimate_price) }, { upsert: true });
+    res.json({ message: "System settings updated successfully!" });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ message: "Failed to update settings." });
+  }
+};
+
+const updateVendorCommission = async (req, res) => {
+  const { id } = req.params;
+  const { vendorCommissionPercent, platformCommissionPercent, reason } = req.body;
+  try {
+    const Vendor = require('../models/Vendor');
+    const CommissionAudit = require('../models/CommissionAudit');
+    const fs = require('fs');
+    const path = require('path');
+    
+    const vendor = await Vendor.findById(id).populate('user');
+    if (!vendor) return res.status(404).json({ message: "Vendor profile not found." });
+    
+    const oldVendorPercent = vendor.vendorCommissionPercent !== undefined ? vendor.vendorCommissionPercent : 90;
+    const oldPlatformPercent = vendor.platformCommissionPercent !== undefined ? vendor.platformCommissionPercent : 10;
+    
+    vendor.vendorCommissionPercent = Number(vendorCommissionPercent);
+    vendor.platformCommissionPercent = Number(platformCommissionPercent);
+    await vendor.save();
+    
+    const audit = await CommissionAudit.create({
+      admin: req.user.id,
+      vendor: id,
+      oldVendorPercent,
+      newVendorPercent: Number(vendorCommissionPercent),
+      oldPlatformPercent,
+      newPlatformPercent: Number(platformCommissionPercent),
+      reason: reason || "Standard adjustment"
+    });
+    
+    const logFilePath = path.join(__dirname, '../commission_audit.log');
+    fs.appendFileSync(logFilePath, JSON.stringify(audit) + "\n");
+    
+    res.json({ message: "Vendor commission updated successfully!", vendor });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ message: "Failed to update vendor commission." });
+  }
+};
+
+// @desc    Get all student refund requests (opt-outs pending approval)
+// @route   GET /api/admin/refund-requests
+// @access  Private (Admin)
+const getRefundRequests = async (req, res) => {
+  try {
+    const { status } = req.query;
+    const filter = {};
+    if (status) filter.status = status;
+
+    const refunds = await RefundRequest.find(filter)
+      .populate('student', 'name email phone')
+      .populate('sponsor', 'name email')
+      .populate('subscription', 'planId startDate endDate totalPaidKES')
+      .sort({ createdAt: -1 })
+      .lean();
+
+    res.json(refunds);
+  } catch (error) {
+    console.error('Get Refund Requests Error:', error);
+    res.status(500).json({ message: 'Server Error fetching refund requests' });
+  }
+};
+
+// @desc    Approve or reject a student refund request
+// @route   POST /api/admin/refund-requests/:id/handle
+// @access  Private (Admin)
+const handleRefundApproval = async (req, res) => {
+  const { id } = req.params;
+  const { status, rejectionReason } = req.body; // status: 'approved' or 'rejected'
+
+  try {
+    // Atomic lock: only process 'pending_admin_approval' requests to prevent race conditions
+    const refundRequest = await RefundRequest.findOneAndUpdate(
+      { _id: id, status: 'pending_admin_approval' },
+      { $set: { status: status === 'approved' ? 'processing' : 'rejected' } },
+      { new: true }
+    ).populate('student', 'name email phone')
+     .populate('sponsor', 'name email');
+
+    if (!refundRequest) {
+      return res.status(400).json({ message: 'Refund request not found or already processed.' });
+    }
+
+    // Audit record for every admin action
+    const fs = require('fs');
+    const path = require('path');
+    const auditRecord = {
+      adminId: req.user.id,
+      adminEmail: req.user.email,
+      timestamp: new Date(),
+      ip: req.ip || req.connection?.remoteAddress || '127.0.0.1',
+      refundRequestId: id,
+      amountKES: refundRequest.amountKES,
+      studentId: refundRequest.student?._id,
+      action: status
+    };
+    console.log('[SECURITY AUDIT LOG] Refund action processed:', auditRecord);
+    const logFilePath = path.join(__dirname, '../refund_security_audit.log');
+    fs.appendFileSync(logFilePath, JSON.stringify(auditRecord) + '\n');
+
+    if (status === 'approved') {
+      // 1. Execute wallet refund: locked -> available for student (or sponsor)
+      //    escrowService.calculateRefund handles: deducting lockedBalanceKES, crediting available
+      try {
+        await escrowService.calculateRefund(
+          refundRequest.deliveryIds || [],
+          refundRequest.student._id,
+          refundRequest.sponsor?._id || null
+        );
+      } catch (refundErr) {
+        // Revert status if wallet operation fails
+        await RefundRequest.findByIdAndUpdate(id, { status: 'pending_admin_approval' });
+        console.error('Refund wallet operation failed:', refundErr.message);
+        return res.status(500).json({ message: 'Wallet refund failed: ' + refundErr.message });
+      }
+
+      // 2. Restore wallet status to active
+      await Wallet.findOneAndUpdate(
+        { user: refundRequest.student._id },
+        { $set: { status: 'active' } }
+      );
+
+      // 3. If M-Pesa phone is on file, trigger B2C payout
+      let payoutResult = null;
+      const studentPhone = refundRequest.student?.phone;
+      if (studentPhone && refundRequest.amountKES > 0) {
+        try {
+          payoutResult = await mpesaService.withdrawToMpesa(studentPhone, refundRequest.amountKES);
+          console.log('[Refund B2C] M-Pesa payout initiated:', payoutResult);
+        } catch (payoutErr) {
+          // Log payout failure but don't fail the approval (wallet already corrected)
+          console.error('[Refund B2C] M-Pesa B2C payout initiation failed:', payoutErr.message);
+        }
+      }
+
+      // 4. Create withdrawal transaction log
+      await Transaction.create({
+        transactionId: crypto.randomUUID(),
+        fromUser: refundRequest.student._id,
+        amountKES: refundRequest.amountKES,
+        transactionCategory: 'refund',
+        paymentMethod: 'mpesa',
+        status: 'completed',
+        description: `Admin-approved refund payout to ${studentPhone || 'phone not on file'}`
+      });
+
+      // 5. Finalize refund request
+      refundRequest.status = 'approved';
+      refundRequest.approvedBy = req.user.id;
+      refundRequest.approvedAt = new Date();
+      await refundRequest.save();
+
+      return res.json({
+        message: `Refund of KES ${refundRequest.amountKES} approved. Wallet updated and payout ${payoutResult ? 'initiated' : 'logged (no phone)'}`,
+        refundRequest
+      });
+
+    } else if (status === 'rejected') {
+      // Rejection: restore wallet status to active — locked funds remain locked (student keeps subscription)
+      await Wallet.findOneAndUpdate(
+        { user: refundRequest.student._id },
+        { $set: { status: 'active' } }
+      );
+
+      refundRequest.status = 'rejected';
+      refundRequest.approvedBy = req.user.id;
+      refundRequest.rejectedAt = new Date();
+      refundRequest.rejectionReason = rejectionReason || 'Rejected by administrator';
+      await refundRequest.save();
+
+      return res.json({
+        message: 'Refund request rejected. Wallet restored to active status.',
+        refundRequest
+      });
+
+    } else {
+      await RefundRequest.findByIdAndUpdate(id, { status: 'pending_admin_approval' });
+      return res.status(400).json({ message: "Invalid status. Use 'approved' or 'rejected'." });
+    }
+  } catch (error) {
+    console.error('Handle Refund Approval Error:', error);
+    res.status(500).json({ message: 'Server error during refund approval: ' + error.message });
+  }
+};
+
+const getShuffleDemandStats = async (req, res) => {
+  const { planId } = req.query;
+  try {
+    const Subscription = require('../models/Subscription');
+    const Delivery = require('../models/Delivery');
+    
+    const query = { status: 'active' };
+    if (planId) query.planId = planId;
+    
+    const subscribers = await Subscription.find(query).select('student planId').lean();
+    const subscriberCount = subscribers.length;
+    const threshold = Math.max(1, Math.floor(subscriberCount / 3));
+    
+    const studentIds = subscribers.map(s => s.student);
+    const mealDemand = await Delivery.aggregate([
+      { $match: { student: { $in: studentIds }, status: 'pending' } },
+      { $unwind: "$items" },
+      { $group: { _id: "$items.name", count: { $sum: 1 } } }
+    ]);
+    
+    const impact = mealDemand.map(m => {
+      const warning = m.count <= threshold;
+      return {
+        mealName: m._id,
+        count: m.count,
+        threshold,
+        status: warning ? 'At Risk' : 'Safe',
+        impact: warning ? "A shuffle must never reduce this meal further." : "Shuffling is safe."
+      };
+    });
+    
+    res.json({
+      subscriberCount,
+      threshold,
+      mealDemand,
+      impact
+    });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ message: "Failed to calculate shuffle demand analytics." });
+  }
+};
+
 module.exports = {
   getDashboard,
   getUsers,
@@ -760,4 +1027,10 @@ module.exports = {
   getWithdrawalRequests,
   handleWithdrawalRequest,
   assignLocationsToDriver,
+  getSettings,
+  updateSettings,
+  updateVendorCommission,
+  getShuffleDemandStats,
+  getRefundRequests,
+  handleRefundApproval,
 };

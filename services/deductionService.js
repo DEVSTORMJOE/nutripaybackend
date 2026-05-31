@@ -32,17 +32,28 @@ const processDailyDeductions = async () => {
         continue;
       }
       
-      const vendorWallet = await Wallet.findOne({ user: meal.vendor });
+      const Vendor = require('../models/Vendor');
+      const vendorProfile = await Vendor.findById(meal.vendor);
+      if (!vendorProfile) {
+        console.error(`Vendor profile not found for vendor ${meal.vendor}`);
+        continue;
+      }
+      
+      const vendorWallet = await Wallet.findOne({ user: vendorProfile.user });
       if (!vendorWallet) {
-        console.error(`Vendor wallet not found for vendor ${meal.vendor}`);
+        console.error(`Vendor wallet not found for user ${vendorProfile.user}`);
         continue;
       }
 
       const dailyCost = Number(sub.dailyCost || 0);
       if (dailyCost <= 0) continue;
 
-      // Split cost: 90% Vendor, 10% Platform Revenue Commission
-      const commission = Number((dailyCost * 0.10).toFixed(2));
+      // Split cost: Vendor dynamic commission rate, Platform dynamic commission rate
+      const vendorCommission = vendorProfile.vendorCommissionPercent !== undefined ? vendorProfile.vendorCommissionPercent : 90;
+      const platformCommission = vendorProfile.platformCommissionPercent !== undefined ? vendorProfile.platformCommissionPercent : 10;
+      const commissionRate = platformCommission / 100;
+
+      const commission = Number((dailyCost * commissionRate).toFixed(2));
       const vendorShare = Number((dailyCost - commission).toFixed(2));
 
       // Deduct locally from locked balance (fallback to available if locked is zero)

@@ -119,5 +119,82 @@ async function runFullReconciliation() {
 }
 
 module.exports = {
-  runFullReconciliation
+  runFullReconciliation,
+  validateWalletInternalConsistency,
+  generateReconciliationReport
 };
+
+/**
+ * Validates that every wallet satisfies:
+ *   availableBalanceKES + lockedBalanceKES === tokenBalanceNT (within 0.01 KES tolerance)
+ */
+async function validateWalletInternalConsistency() {
+  const wallets = await Wallet.find({});
+  const mismatches = [];
+
+  for (const w of wallets) {
+    const computed = Number((w.availableBalanceKES + w.lockedBalanceKES).toFixed(2));
+    const diff = Math.abs(computed - w.tokenBalanceNT);
+    if (diff > 0.01) {
+      mismatches.push({
+        userId: w.user,
+        walletType: w.walletType,
+        tokenBalanceNT: w.tokenBalanceNT,
+        availableBalanceKES: w.availableBalanceKES,
+        lockedBalanceKES: w.lockedBalanceKES,
+        computedTotal: computed,
+        discrepancyKES: Number((computed - w.tokenBalanceNT).toFixed(2))
+      });
+    }
+  }
+
+  if (mismatches.length > 0) {
+    console.warn(`[Reconciliation] WARNING: ${mismatches.length} wallet(s) fail internal consistency (available + locked != tokenBalanceNT).`);
+  } else {
+    console.log(`[Reconciliation] All ${wallets.length} wallets pass internal consistency check.`);
+  }
+
+  return { valid: mismatches.length === 0, totalChecked: wallets.length, mismatches };
+}
+
+/**
+ * Generates a full financial reconciliation report (internal + Stellar cross-chain)
+ */
+async function generateReconciliationReport() {
+  const timestamp = new Date();
+  const internalCheck = await validateWalletInternalConsistency();
+
+  let stellarReconciliation = null;
+  try {
+    stellarReconciliation = await runFullReconciliation();
+  } catch (err) {
+    stellarReconciliation = { success: false, error: err.message };
+  }
+
+  const wallets = await Wallet.find({});
+  const stats = {
+    totalWallets: wallets.length,
+    totalAvailableKES: Number(wallets.reduce((s, w) => s + w.availableBalanceKES, 0).toFixed(2)),
+    totalLockedKES: Number(wallets.reduce((s, w) => s + w.lockedBalanceKES, 0).toFixed(2)),
+    totalTokenBalanceNT: Number(wallets.reduce((s, w) => s + w.tokenBalanceNT, 0).toFixed(2)),
+    byType: {
+      student: wallets.filter(w => w.walletType === 'student').length,
+      vendor: wallets.filter(w => w.walletType === 'vendor').length,
+      sponsor: wallets.filter(w => w.walletType === 'sponsor').length,
+      admin: wallets.filter(w => w.walletType === 'admin').length,
+    }
+  };
+
+  const RefundRequest = require('../models/RefundRequest');
+  const pendingRefunds = await RefundRequest.find({ status: 'pending_admin_approval' }).lean();
+  const totalPendingRefundKES = pendingRefunds.reduce((s, r) => s + r.amountKES, 0);
+
+  return {
+    generatedAt: timestamp,
+    overallHealthy: internalCheck.valid && (stellarReconciliation && stellarReconciliation.success !== false),
+    internalConsistency: internalCheck,
+    stellarReserves: stellarReconciliation,
+    walletStats: stats,
+    pendingRefunds: { count: pendingRefunds.length, totalAmountKES: totalPendingRefundKES }
+  };
+}

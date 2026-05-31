@@ -124,6 +124,14 @@ const vendorSchema = new mongoose.Schema(
         },
       },
     ],
+    vendorCommissionPercent: {
+      type: Number,
+      default: 90,
+    },
+    platformCommissionPercent: {
+      type: Number,
+      default: 10,
+    },
   },
   { timestamps: true }
 );

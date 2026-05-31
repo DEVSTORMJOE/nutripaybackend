@@ -24,6 +24,7 @@ const transactionSchema = new mongoose.Schema({
       'deposit',
       'subscription_lock',
       'custom_order',
+      'quick_order',
       'vendor_payout',
       'withdrawal',
       'refund',

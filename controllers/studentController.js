@@ -4,6 +4,7 @@ const Wallet = require('../models/Wallet');
 const User = require('../models/User');
 const Delivery = require('../models/Delivery');
 const Transaction = require('../models/Transaction');
+const Student = require('../models/Student');
 const walletService = require('../services/walletService');
 const escrowService = require('../services/escrowService');
 
@@ -15,6 +16,7 @@ const getDashboard = async (req, res) => {
     const studentId = req.user.id;
     const subscription = await Subscription.findOne({ student: studentId, status: 'active' }).populate('meal');
     const wallet = await walletService.getOrCreateWallet(studentId, 'student');
+    const studentProfile = await Student.findOne({ user: studentId });
 
     // Fetch deliveries
     const today = new Date();
@@ -41,6 +43,10 @@ const getDashboard = async (req, res) => {
       status: { $in: ['pending', 'assigned'] }
     });
 
+    const mealsDonated = await Delivery.countDocuments({ originalStudent: studentId, isDonated: true });
+    const mealsClaimed = await Delivery.countDocuments({ student: studentId, claimedAt: { $exists: true, $ne: null } });
+    const availableDonations = await Delivery.countDocuments({ status: 'donated' });
+
     res.json({
       balance: wallet.availableBalanceKES,
       availableBalanceKES: wallet.availableBalanceKES,
@@ -48,7 +54,13 @@ const getDashboard = async (req, res) => {
       subscription,
       todaysDelivery,
       upcomingDeliveriesCount,
-      walletPublicKey: null
+      walletPublicKey: null,
+      shufflesCount: studentProfile ? (studentProfile.shufflesCount || 0) : 0,
+      donationStats: {
+        mealsDonated,
+        mealsClaimed,
+        availableDonations
+      }
     });
   } catch (error) {
     console.error(error);
@@ -103,76 +115,75 @@ const optOut = async (req, res) => {
     const studentWallet = await Wallet.findOne({ user: studentId });
     if (!studentWallet) return res.status(404).json({ message: 'Student wallet not found' });
 
-    // Freeze Wallet to prevent race conditions
+    // Find active subscription
+    const subscription = await Subscription.findOne({ student: studentId, status: 'active' });
+    
+    // Find unfulfilled deliveries
+    const pendingDeliveries = await Delivery.find({
+      student: studentId,
+      status: { $in: ['pending', 'assigned', 'preparing', 'ready'] }
+    });
+
+    if (!subscription && pendingDeliveries.length === 0) {
+      return res.status(400).json({ message: 'No active subscription or unfulfilled deliveries to opt out from.' });
+    }
+
+    // Freeze Wallet to show 'refund_pending' progress banner on frontend
     studentWallet.status = 'refund_pending';
     await studentWallet.save();
 
-    const subscription = await Subscription.findOne({ student: studentId, status: 'active' });
-    const pendingDeliveries = await Delivery.find({ student: studentId, status: 'pending' });
+    // Sum unfulfilled delivery costs
+    let totalRefundKes = 0;
+    const pendingDeliveryIds = [];
+    let sponsorId = subscription?.sponsor || null;
 
-    // 1. Calculate and refund pending deliveries via Escrow Service (locks Escrow -> Treasury Stellar transaction inside)
-    const pendingDeliveryIds = pendingDeliveries.map(d => d._id);
-    const refundResult = await escrowService.calculateRefund(pendingDeliveryIds, studentId);
+    pendingDeliveries.forEach(d => {
+      totalRefundKes += Number(d.totalCost || 0);
+      pendingDeliveryIds.push(d._id);
+      if (d.sponsor && !sponsorId) {
+        sponsorId = d.sponsor;
+      }
+    });
 
-    // 2. Calculate Unused Wallet Balance Refund
-    let sponsorId = null;
-    if (subscription && subscription.sponsor) {
-      sponsorId = subscription.sponsor;
-    } else {
-      const student = await User.findById(studentId).populate('linkedAccounts');
-      if (student && student.linkedAccounts && student.linkedAccounts.length > 0) {
-        const potentialSponsor = student.linkedAccounts.find(account => account.role === 'sponsor');
+    // Fallback sponsor lookups if not found on subscription
+    if (!sponsorId) {
+      const studentObj = await User.findById(studentId).populate('linkedAccounts');
+      if (studentObj && studentObj.linkedAccounts && studentObj.linkedAccounts.length > 0) {
+        const potentialSponsor = studentObj.linkedAccounts.find(account => account.role === 'sponsor');
         if (potentialSponsor) sponsorId = potentialSponsor._id;
       }
     }
 
-    let walletRefundToSponsor = 0;
-    if (studentWallet.availableBalanceKES > 0 && sponsorId) {
-      walletRefundToSponsor = studentWallet.availableBalanceKES;
-
-      // Deduct student, credit sponsor internally (fiat level custodial sync)
-      await walletService.debitWallet(
-        studentId,
-        walletRefundToSponsor,
-        'refund',
-        'wallet',
-        `Refund unused student wallet balance to sponsor: ${sponsorId}`
+    // Cancel deliveries immediately to halt service
+    if (pendingDeliveryIds.length > 0) {
+      await Delivery.updateMany(
+        { _id: { $in: pendingDeliveryIds } },
+        { $set: { status: 'cancelled' } }
       );
-
-      await walletService.creditWallet(
-        sponsorId,
-        walletRefundToSponsor,
-        'refund',
-        'wallet',
-        `Refund of unused sponsored student wallet balance`
-      );
-
-      // Notify Sponsor
-      const Notification = require('../models/Notification');
-      await Notification.create({
-        user: sponsorId,
-        type: 'system',
-        title: 'Sponsorship Refund',
-        message: `A sponsored student opted out. Unused student balance of ${walletRefundToSponsor} KES was refunded to your wallet.`
-      });
     }
 
+    // Cancel subscription
     if (subscription) {
       subscription.status = 'cancelled';
       subscription.endDate = Date.now();
       await subscription.save();
     }
 
-    // Unfreeze Wallet
-    studentWallet.status = 'active';
-    await studentWallet.save();
+    // Create Refund Request
+    const RefundRequest = require('../models/RefundRequest');
+    const refundRequest = await RefundRequest.create({
+      student: studentId,
+      amountKES: totalRefundKes,
+      fundingType: sponsorId ? 'sponsor' : 'self',
+      sponsor: sponsorId,
+      subscription: subscription ? subscription._id : null,
+      deliveryIds: pendingDeliveryIds,
+      status: 'pending_admin_approval'
+    });
 
-    const totalRefund = (subscription?.sponsor ? refundResult.refundedKES : 0) + walletRefundToSponsor;
-
-    res.json({ 
-      message: `Successfully opted out. Please note that refunds are processed within 7 days. You will receive your remaining amount of KES ${totalRefund} thereafter.`, 
-      refundedToSponsor: totalRefund, 
-      refundedToStudent: subscription?.sponsor ? 0 : refundResult.refundedKES 
+    res.json({
+      message: `Opt-out request submitted. Your refund request of KES ${totalRefundKes} is pending admin approval.`,
+      refundRequest
     });
 
   } catch (error) {
@@ -410,7 +421,7 @@ const shuffleMeal = async (req, res) => {
 
       if (currentOriginalMealCount <= threshold) {
         return res.status(400).json({
-          message: "This meal cannot be selected because the minimum production threshold would be violated."
+          message: "This meal cannot be selected because the minimum preparation threshold would be violated."
         });
       }
     }
@@ -436,6 +447,210 @@ const shuffleMeal = async (req, res) => {
   }
 };
 
+const getStudentDailyBudget = async (studentId) => {
+  const Subscription = require('../models/Subscription');
+  const SystemSettings = require('../models/SystemSettings');
+  
+  const sub = await Subscription.findOne({ student: studentId, status: 'active' });
+  if (!sub) return 150; // default/fallback
+  
+  if (sub.planId && sub.planId !== 'custom') {
+    const tier = sub.planId.toLowerCase();
+    let settingKey = 'essential_price';
+    let defaultVal = 3500;
+    if (tier.includes('elite')) {
+      settingKey = 'elite_price';
+      defaultVal = 4500;
+    } else if (tier.includes('ultimate')) {
+      settingKey = 'ultimate_price';
+      defaultVal = 6000;
+    }
+    const priceSetting = await SystemSettings.findOne({ key: settingKey });
+    const monthlyPrice = priceSetting ? priceSetting.value : defaultVal;
+    return Number((monthlyPrice / 28).toFixed(2));
+  }
+  
+  if (sub.planId === 'custom') {
+    if (sub.totalPaidKES) {
+      const days = Math.ceil((new Date(sub.endDate) - new Date(sub.startDate)) / (1000 * 60 * 60 * 24)) || 28;
+      return Number((sub.totalPaidKES / days).toFixed(2));
+    }
+  }
+  
+  return sub.dailyCost || 150;
+};
+
+// @desc    Get all approved meals that cost less than or equal to the student's daily budget
+// @route   GET /api/student/meal-change-alternatives
+// @access  Private (Student)
+const getMealChangeAlternatives = async (req, res) => {
+  try {
+    const studentId = req.user.id;
+    const { deliveryId } = req.query;
+    
+    if (!deliveryId) {
+      return res.status(400).json({ message: "deliveryId is required" });
+    }
+    
+    const delivery = await Delivery.findOne({ _id: deliveryId, student: studentId });
+    if (!delivery) {
+      return res.status(404).json({ message: "Delivery not found" });
+    }
+    
+    const dailyBudget = await getStudentDailyBudget(studentId);
+    
+    // Fetch all approved meals with price <= dailyBudget
+    const meals = await Meal.find({
+      approvalStatus: 'approved',
+      price: { $lte: dailyBudget }
+    }).populate({
+      path: 'vendor',
+      populate: { path: 'user', select: 'name email' }
+    });
+    
+    res.json({ dailyBudget, meals });
+  } catch (error) {
+    console.error("Get Meal Change Alternatives Error:", error);
+    res.status(500).json({ message: "Failed to fetch meal alternatives" });
+  }
+};
+
+// @desc    Change a scheduled meal
+// @route   POST /api/student/meal-change
+// @access  Private (Student)
+const changeMeal = async (req, res) => {
+  const { deliveryId, newMealId } = req.body;
+  
+  try {
+    const studentId = req.user.id;
+    const MealChangeLog = require('../models/MealChangeLog');
+    const fs = require('fs');
+    const path = require('path');
+    
+    // 1. Query delivery and verify
+    const delivery = await Delivery.findOne({ _id: deliveryId, student: studentId });
+    if (!delivery) {
+      return res.status(404).json({ message: "Delivery not found." });
+    }
+    
+    // Verify status is strictly pending
+    if (delivery.status !== 'pending') {
+      return res.status(400).json({ message: "Only pending deliveries can be changed." });
+    }
+    
+    // 2. Check restriction: Max 1 change per day (query MealChangeLog for today)
+    const todayStart = new Date();
+    todayStart.setHours(0,0,0,0);
+    const todayEnd = new Date();
+    todayEnd.setHours(23,59,59,999);
+    
+    const existingChange = await MealChangeLog.findOne({
+      student: studentId,
+      deliveryId: deliveryId,
+      createdAt: { $gte: todayStart, $lte: todayEnd },
+      approvalResult: 'Approved'
+    });
+    
+    if (existingChange) {
+      return res.status(400).json({ message: "You can only make 1 meal change per day for a scheduled delivery." });
+    }
+    
+    // 3. Cutoff Check: At least 2 hours before delivery time
+    // Breakfast = 5:00 AM cutoff, Lunch = 10:00 AM cutoff, Supper = 4:00 PM cutoff
+    const deliveryDate = new Date(delivery.scheduledDate);
+    const cutoffDate = new Date(deliveryDate);
+    if (delivery.timeSlot === 'Breakfast') {
+      cutoffDate.setHours(5, 0, 0, 0);
+    } else if (delivery.timeSlot === 'Lunch') {
+      cutoffDate.setHours(10, 0, 0, 0);
+    } else if (delivery.timeSlot === 'Supper') {
+      cutoffDate.setHours(16, 0, 0, 0);
+    } else {
+      cutoffDate.setTime(deliveryDate.getTime() - 2 * 60 * 60 * 1000);
+    }
+    
+    if (Date.now() > cutoffDate.getTime()) {
+      await MealChangeLog.create({
+        student: studentId,
+        deliveryId,
+        originalMeal: delivery.items?.[0]?.name || 'Unknown',
+        newMeal: 'N/A',
+        dailyBudget: 0,
+        approvalResult: 'Rejected',
+        reason: 'Cutoff time has passed'
+      });
+      return res.status(400).json({ message: "Cutoff time has passed. Meals cannot be changed within 2 hours of delivery window." });
+    }
+    
+    // 4. Find new meal
+    const newMeal = await Meal.findById(newMealId);
+    if (!newMeal || newMeal.approvalStatus !== 'approved') {
+      return res.status(400).json({ message: "Target meal is not approved or does not exist." });
+    }
+    
+    // 5. Daily budget check
+    const dailyBudget = await getStudentDailyBudget(studentId);
+    if (newMeal.price > dailyBudget) {
+      await MealChangeLog.create({
+        student: studentId,
+        deliveryId,
+        originalMeal: delivery.items?.[0]?.name || 'Unknown',
+        newMeal: newMeal.name,
+        dailyBudget,
+        approvalResult: 'Rejected',
+        reason: `Meal price ${newMeal.price} KES exceeds daily budget of ${dailyBudget} KES`
+      });
+      return res.status(400).json({ message: `Meal price exceeds daily budget of ${dailyBudget} KES` });
+    }
+    
+    // 6. Perform swap
+    const originalMealName = delivery.items?.[0]?.name || 'Unknown';
+    delivery.items = [{ name: newMeal.name, quantity: 1 }];
+    delivery.vendor = newMeal.vendor;
+    await delivery.save();
+    
+    // Log to MealChangeLog Mongoose collection
+    const changeLog = await MealChangeLog.create({
+      student: studentId,
+      deliveryId,
+      originalMeal: originalMealName,
+      newMeal: newMeal.name,
+      dailyBudget,
+      approvalResult: 'Approved',
+      reason: `Meal changed successfully from ${originalMealName} to ${newMeal.name}`
+    });
+    
+    // Log to meal_changes.log file
+    const logFilePath = path.join(__dirname, '../meal_changes.log');
+    fs.appendFileSync(logFilePath, JSON.stringify(changeLog) + "\n");
+    
+    res.json({
+      success: true,
+      message: "Meal changed successfully!",
+      delivery
+    });
+  } catch (error) {
+    console.error("Meal Change Error:", error);
+    res.status(500).json({ message: "Failed to change meal: " + error.message });
+  }
+};
+
+// @desc    Get refund requests for the authenticated student
+// @route   GET /api/student/my-refund-requests
+// @access  Private (Student)
+const getMyRefundRequests = async (req, res) => {
+  try {
+    const RefundRequest = require('../models/RefundRequest');
+    const refunds = await RefundRequest.find({ student: req.user.id })
+      .sort({ createdAt: -1 })
+      .lean();
+    res.json(refunds);
+  } catch (error) {
+    console.error('Get My Refund Requests Error:', error);
+    res.status(500).json({ message: 'Server Error fetching refund requests' });
+  }
+};
+
 module.exports = {
   getDashboard,
   selectMeal,
@@ -445,5 +660,9 @@ module.exports = {
   donateDelivery,
   getDonatedMeals,
   claimDonatedMeal,
-  shuffleMeal
+  shuffleMeal,
+  getMealChangeAlternatives,
+  changeMeal,
+  getMyRefundRequests,
 };
+

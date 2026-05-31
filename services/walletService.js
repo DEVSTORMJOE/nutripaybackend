@@ -259,12 +259,23 @@ async function unlockFunds(userId, amountKes, session = null) {
 
 /**
  * Process refund: Release from lockedBalanceKES and credit availableBalanceKES
+ * IMPORTANT: This assumes the refund amount comes FROM locked funds.
+ * tokenBalanceNT (available + locked) must remain unchanged after a pure refund.
  */
 async function refundFunds(userId, amountKes, category, sourceType = 'self', session = null) {
   const wallet = await getOrCreateWallet(userId, 'student', session);
 
-  wallet.availableBalanceKES = Number((wallet.availableBalanceKES + Number(amountKes)).toFixed(2));
-  wallet.totalRefundedKES = Number((wallet.totalRefundedKES + Number(amountKes)).toFixed(2));
+  const amount = Number(amountKes);
+
+  // Guard: cannot refund more than is locked
+  if (wallet.lockedBalanceKES < amount) {
+    throw new Error(`Refund amount ${amount} exceeds lockedBalanceKES ${wallet.lockedBalanceKES}`);
+  }
+
+  // Move from locked → available (net tokenBalanceNT stays the same)
+  wallet.lockedBalanceKES = Number((wallet.lockedBalanceKES - amount).toFixed(2));
+  wallet.availableBalanceKES = Number((wallet.availableBalanceKES + amount).toFixed(2));
+  wallet.totalRefundedKES = Number((wallet.totalRefundedKES + amount).toFixed(2));
 
   // Add back to designated funding sources bucket
   let existingSource = wallet.walletFundingSources.find(
@@ -272,11 +283,11 @@ async function refundFunds(userId, amountKes, category, sourceType = 'self', ses
   );
 
   if (existingSource) {
-    existingSource.amountKES = Number((existingSource.amountKES + Number(amountKes)).toFixed(2));
+    existingSource.amountKES = Number((existingSource.amountKES + amount).toFixed(2));
   } else {
     wallet.walletFundingSources.push({
       sourceType,
-      amountKES: Number(amountKes),
+      amountKES: amount,
       restrictedUsage: false,
       restrictedUsageType: 'none',
       nutritionCategory: [],
@@ -299,9 +310,16 @@ async function getSpendableBalance(userId, role = 'student', session = null) {
 /**
  * Split custom order revenue into vendor share and platform commission
  */
-function splitCustomOrderRevenue(orderTotal) {
-  const commissionPercent = Number(process.env.PLATFORM_COMMISSION_PERCENT || 10) / 100;
-  const platformRate = paymentConfig.platformCommissionRate || commissionPercent;
+async function splitCustomOrderRevenue(orderTotal, vendorUserId) {
+  let platformCommissionPercent = 10;
+  if (vendorUserId) {
+    const Vendor = require('../models/Vendor');
+    const vendorProfile = await Vendor.findOne({ user: vendorUserId });
+    if (vendorProfile && vendorProfile.platformCommissionPercent !== undefined) {
+      platformCommissionPercent = vendorProfile.platformCommissionPercent;
+    }
+  }
+  const platformRate = platformCommissionPercent / 100;
   const deliveryFee = paymentConfig.deliveryFeeRate || 0;
   
   const commission = Number((orderTotal * platformRate).toFixed(2));
@@ -334,7 +352,7 @@ async function processWalletCustomOrder(userId, vendorUserId, items, totalCost, 
   await debitResult.transaction.save({ session });
 
   // 2. Split revenue
-  const { vendorShare, commission } = splitCustomOrderRevenue(totalCost);
+  const { vendorShare, commission } = await splitCustomOrderRevenue(totalCost, vendorUserId);
 
   // 3. Credit Vendor wallet available balance instantly
   const creditResult = await creditWallet(
@@ -391,7 +409,7 @@ async function processMpesaDirectCustomOrder(checkoutRequestID, amountPaid, mpes
   if (!vendorProfile) throw new Error("Vendor not found");
 
   // 3. Split revenue
-  const { vendorShare, commission } = splitCustomOrderRevenue(amountPaid);
+  const { vendorShare, commission } = await splitCustomOrderRevenue(amountPaid, vendorProfile.user);
 
   // 4. Credit vendor available balance instantly
   const creditResult = await creditWallet(
@@ -463,18 +481,15 @@ async function refundCustomOrder(orderId, session = null) {
   const order = await CustomOrder.findById(orderId).session(session);
   if (!order) throw new Error("Custom order not found");
   
-  if (order.status === 'cancelled' || order.status === 'failed') {
-    return { alreadyRefunded: true };
-  }
+  const Vendor = require('../models/Vendor');
+  const vendorProfile = await Vendor.findOne({ _id: order.vendor }).session(session);
+  const vendorUserId = vendorProfile ? vendorProfile.user : null;
 
-  const { vendorShare } = splitCustomOrderRevenue(order.totalCost);
+  const { vendorShare } = await splitCustomOrderRevenue(order.totalCost, vendorUserId);
 
   // Update order status
   order.status = 'cancelled';
   await order.save({ session });
-
-  const Vendor = require('../models/Vendor');
-  const vendorProfile = await Vendor.findById(order.vendor).session(session);
 
   if (order.paymentMethod === 'wallet') {
     // 1. Credit student wallet available balance

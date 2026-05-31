@@ -23,10 +23,12 @@ const router = express.Router();
 
 
 const { listMeals, createMeal, updateMeal, setMealActive, deleteMeal, getWeeklyPlans, shuffleWeeklyPlan } = require("../controllers/mealController");
+const { getSettings } = require("../controllers/adminController");
 
 router.get("/", listMeals);
 router.get("/weekly-plans", getWeeklyPlans);
 router.post("/weekly-plans/shuffle", shuffleWeeklyPlan);
+router.get("/settings", getSettings);
 
 // Admin (protected)
 router.post("/",  createMeal);

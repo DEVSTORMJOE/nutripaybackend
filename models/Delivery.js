@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const DeliveryPersonnel = require('./DeliveryPersonnel');
 
 const deliverySchema = new mongoose.Schema({
   student: {
@@ -59,6 +60,42 @@ const deliverySchema = new mongoose.Schema({
   },
   claimedAt: Date
 }, { timestamps: true });
+
+deliverySchema.pre('save', async function (next) {
+  if (this.status === 'pending' && !this.deliveryAgent) {
+    try {
+      const DeliveryPersonnel = mongoose.model('DeliveryPersonnel');
+      let locId = this.deliveryLocation;
+      
+      // If deliveryLocation is not set but location (hostel name) is set, find the delivery location document
+      if (!locId && this.location) {
+        const DeliveryLocation = mongoose.model('DeliveryLocation');
+        const dl = await DeliveryLocation.findOne({
+          hostelResidence: new RegExp('^' + this.location.trim() + '$', 'i')
+        });
+        if (dl) {
+          locId = dl._id;
+          this.deliveryLocation = dl._id;
+        }
+      }
+      
+      if (locId) {
+        // Find approved delivery personnel assigned to this location
+        const assignedStaff = await DeliveryPersonnel.findOne({
+          assignedLocations: locId,
+          approvedStatus: 'approved'
+        });
+        if (assignedStaff) {
+          this.deliveryAgent = assignedStaff.user;
+          this.status = 'assigned';
+        }
+      }
+    } catch (err) {
+      console.error("Auto routing delivery assignment failed:", err);
+    }
+  }
+  next();
+});
 
 const Delivery = mongoose.model('Delivery', deliverySchema);
 module.exports = Delivery;

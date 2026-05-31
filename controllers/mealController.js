@@ -37,7 +37,13 @@ async function listMeals(req, res) {
     const q = { approvalStatus: "approved" };
     if (active === "true") q.isActive = true;
 
-    const items = await Meal.find(q).sort({ createdAt: -1 }).lean();
+    const items = await Meal.find(q)
+      .populate({
+        path: "vendor",
+        populate: { path: "user", select: "name" }
+      })
+      .sort({ createdAt: -1 })
+      .lean();
     return res.json(items);
   } catch (e) {
     return res.status(500).json({ message: "Failed to load meals" });
