@@ -230,6 +230,7 @@ const getWallets = async (req, res) => {
 // @access  Private (Admin)
 const getTransactions = async (req, res) => {
   try {
+    const { explainTransaction } = require('../utils/transactionUtils');
     const transactions = await Transaction.find()
       .populate('fromUser', 'name email role')
       .populate('toUser', 'name email role')
@@ -245,10 +246,15 @@ const getTransactions = async (req, res) => {
                    tx.transactionCategory === 'withdrawal' ? 'withdrawal' : 
                    tx.transactionCategory === 'refund' ? 'refund' : 'payment';
 
+      const { source, destination, purpose } = explainTransaction(tx);
+
       return {
         ...tx,
         amount: tx.amountKES,
         type,
+        source,
+        destination,
+        purpose,
         fromWallet: tx.fromUser ? { user: tx.fromUser, walletType: tx.fromUser.role } : null,
         toWallet: tx.toUser ? { user: tx.toUser, walletType: tx.toUser.role } : null
       };
@@ -453,17 +459,95 @@ const updateMealApproval = async (req, res) => {
 // @access  Private (Admin)
 const getOrders = async (req, res) => {
   try {
-    const orders = await Delivery.find()
-      .populate('student', 'name email role')
+    const page = Math.max(1, parseInt(req.query.page) || 1);
+    const limit = Math.max(1, parseInt(req.query.limit) || 10);
+    const skip = (page - 1) * limit;
+
+    const query = {};
+
+    // 1. Base Dropdown Filters
+    if (req.query.status) {
+      query.status = req.query.status;
+    }
+    if (req.query.mealType) {
+      query.timeSlot = req.query.mealType;
+    }
+    if (req.query.driver) {
+      query.deliveryAgent = req.query.driver;
+    }
+    if (req.query.vendor) {
+      query.vendor = req.query.vendor;
+    }
+    if (req.query.student) {
+      query.student = req.query.student;
+    }
+
+    // Date Range Filters
+    if (req.query.startDate || req.query.endDate) {
+      query.scheduledDate = {};
+      if (req.query.startDate) {
+        query.scheduledDate.$gte = new Date(req.query.startDate);
+      }
+      if (req.query.endDate) {
+        const end = new Date(req.query.endDate);
+        end.setHours(23, 59, 59, 999);
+        query.scheduledDate.$lte = end;
+      }
+    }
+
+    // Hostel/Residence filtering
+    if (req.query.hostel) {
+      query.location = { $regex: req.query.hostel, $options: 'i' };
+    }
+
+    // 2. Search Parameter (Student Name, Order ID, Hostel)
+    if (req.query.search) {
+      const searchRegex = new RegExp(req.query.search.trim(), 'i');
+      
+      // We will need to query students that match the name
+      const matchedUsers = await User.find({
+        role: 'student',
+        name: searchRegex
+      }).select('_id');
+      const studentIds = matchedUsers.map(u => u._id);
+
+      query.$or = [
+        { location: searchRegex },
+        { student: { $in: studentIds } }
+      ];
+
+      // If search string looks like MongoDB ObjectId, check direct match
+      if (req.query.search.match(/^[0-9a-fA-F]{24}$/)) {
+        query.$or.push({ _id: req.query.search });
+      }
+    }
+
+    const totalOrders = await Delivery.countDocuments(query);
+    const orders = await Delivery.find(query)
+      .populate('student', 'name email role phone')
       .populate({
         path: 'vendor',
-        populate: { path: 'user', select: 'name email' }
+        populate: { path: 'user', select: 'name email phone' }
       })
-      .sort({ createdAt: -1 });
-    res.json(orders);
+      .populate('deliveryAgent', 'name email phone')
+      .populate('deliveryLocation', 'hostelResidence block room landmark')
+      .sort({ scheduledDate: -1, createdAt: -1 })
+      .skip(skip)
+      .limit(limit)
+      .lean();
+
+    res.json({
+      orders,
+      pagination: {
+        total: totalOrders,
+        page,
+        limit,
+        pages: Math.ceil(totalOrders / limit)
+      }
+    });
   } catch (error) {
     console.error("Admin getting orders failed:", error);
-    res.status(500).json({ message: 'Failed to fetch orders' });
+    res.status(500).json({ message: 'Failed to fetch orders: ' + error.message });
   }
 };
 
@@ -878,10 +962,21 @@ const handleRefundApproval = async (req, res) => {
     fs.appendFileSync(logFilePath, JSON.stringify(auditRecord) + '\n');
 
     if (status === 'approved') {
+      // Get student's wallet to check current locked balance
+      const studentWallet = await Wallet.findOne({ user: refundRequest.student._id });
+      const currentLocked = studentWallet ? studentWallet.lockedBalanceKES : 0;
+
+      // Cap refund request amount to student's actual remaining locked balance
+      if (refundRequest.amountKES > currentLocked) {
+        console.log(`[Refund Request Capping] Request KES ${refundRequest.amountKES} exceeds locked balance KES ${currentLocked}. Capping to: ${currentLocked} KES.`);
+        refundRequest.amountKES = currentLocked;
+      }
+
       // 1. Execute wallet refund: locked -> available for student (or sponsor)
       //    escrowService.calculateRefund handles: deducting lockedBalanceKES, crediting available
+      let refundResult = null;
       try {
-        await escrowService.calculateRefund(
+        refundResult = await escrowService.calculateRefund(
           refundRequest.deliveryIds || [],
           refundRequest.student._id,
           refundRequest.sponsor?._id || null
@@ -893,18 +988,21 @@ const handleRefundApproval = async (req, res) => {
         return res.status(500).json({ message: 'Wallet refund failed: ' + refundErr.message });
       }
 
+      // Use actual capped refund amount from escrow locked balance
+      const actualRefundKES = refundResult && refundResult.refundedKES !== undefined ? refundResult.refundedKES : refundRequest.amountKES;
+
       // 2. Restore wallet status to active
       await Wallet.findOneAndUpdate(
         { user: refundRequest.student._id },
         { $set: { status: 'active' } }
       );
 
-      // 3. If M-Pesa phone is on file, trigger B2C payout
+      // 3. If M-Pesa phone is on file, trigger B2C payout with actual capped amount
       let payoutResult = null;
       const studentPhone = refundRequest.student?.phone;
-      if (studentPhone && refundRequest.amountKES > 0) {
+      if (studentPhone && actualRefundKES > 0) {
         try {
-          payoutResult = await mpesaService.withdrawToMpesa(studentPhone, refundRequest.amountKES);
+          payoutResult = await mpesaService.withdrawToMpesa(studentPhone, actualRefundKES);
           console.log('[Refund B2C] M-Pesa payout initiated:', payoutResult);
         } catch (payoutErr) {
           // Log payout failure but don't fail the approval (wallet already corrected)
@@ -912,25 +1010,26 @@ const handleRefundApproval = async (req, res) => {
         }
       }
 
-      // 4. Create withdrawal transaction log
+      // 4. Create withdrawal transaction log using actual capped amount
       await Transaction.create({
         transactionId: crypto.randomUUID(),
         fromUser: refundRequest.student._id,
-        amountKES: refundRequest.amountKES,
+        amountKES: actualRefundKES,
         transactionCategory: 'refund',
         paymentMethod: 'mpesa',
         status: 'completed',
-        description: `Admin-approved refund payout to ${studentPhone || 'phone not on file'}`
+        description: `Admin-approved refund payout to ${studentPhone || 'phone not on file'}. Capped to actual escrow lock of KES ${actualRefundKES}.`
       });
 
-      // 5. Finalize refund request
+      // 5. Finalize refund request with actual capped amount
+      refundRequest.amountKES = actualRefundKES;
       refundRequest.status = 'approved';
       refundRequest.approvedBy = req.user.id;
       refundRequest.approvedAt = new Date();
       await refundRequest.save();
 
       return res.json({
-        message: `Refund of KES ${refundRequest.amountKES} approved. Wallet updated and payout ${payoutResult ? 'initiated' : 'logged (no phone)'}`,
+        message: `Refund of KES ${actualRefundKES} approved. Wallet updated and payout ${payoutResult ? 'initiated' : 'logged (no phone)'}`,
         refundRequest
       });
 

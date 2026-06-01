@@ -136,7 +136,8 @@ async function releaseDailyVendorPayment(deliveryId, session = null) {
 
   const commissionTx = await Transaction.create([{
     transactionId: crypto.randomUUID(),
-    fromUser: delivery.student,
+    fromUser: vendorProfile.user, // Vendor pays commission!
+    toUser: null, // to Platform/System
     amountKES: commission,
     transactionCategory: 'commission',
     paymentMethod: 'stellar',
@@ -174,8 +175,25 @@ async function calculateRefund(deliveryIds, studentId, session = null) {
     }
   });
 
-  const totalRefundKes = totalRefundToSponsor + totalRefundToStudent;
-  if (totalRefundKes <= 0) return { refundedKES: 0 };
+  // Get student's wallet to check current locked balance
+  const studentWallet = await Wallet.findOne({ user: studentId }).session(session);
+  let currentLocked = studentWallet ? studentWallet.lockedBalanceKES : 0;
+  let remainingLocked = currentLocked;
+
+  // Cap student portion first
+  if (totalRefundToStudent > remainingLocked) {
+    console.log(`[Escrow Service Capping] Student portion ${totalRefundToStudent} KES exceeds lockedBalanceKES ${remainingLocked} KES. Capping student portion.`);
+    totalRefundToStudent = remainingLocked;
+  }
+  remainingLocked = Number((remainingLocked - totalRefundToStudent).toFixed(2));
+
+  // Cap sponsor portion next
+  if (totalRefundToSponsor > remainingLocked) {
+    console.log(`[Escrow Service Capping] Sponsor portion ${totalRefundToSponsor} KES exceeds remaining locked balance ${remainingLocked} KES. Capping sponsor portion.`);
+    totalRefundToSponsor = remainingLocked;
+  }
+
+  const totalRefundKes = Number((totalRefundToSponsor + totalRefundToStudent).toFixed(2));
 
   console.log(`[Escrow Service] Subscription refund for student ${studentId}. Total: ${totalRefundKes} KES. Sponsor Portion: ${totalRefundToSponsor}, Student Portion: ${totalRefundToStudent}`);
 
@@ -190,12 +208,10 @@ async function calculateRefund(deliveryIds, studentId, session = null) {
   // For sponsor-funded portion: deduct locked from student, credit sponsor's available
   if (totalRefundToSponsor > 0 && sponsorId) {
     // Manually deduct from student lockedBalanceKES (sponsor portion)
-    const studentWallet = await Wallet.findOne({ user: studentId }).session(session);
-    if (!studentWallet || studentWallet.lockedBalanceKES < totalRefundToSponsor) {
-      throw new Error("Student locked balance is insufficient to process sponsor refund portion");
+    if (studentWallet) {
+      studentWallet.lockedBalanceKES = Number((studentWallet.lockedBalanceKES - totalRefundToSponsor).toFixed(2));
+      await studentWallet.save({ session });
     }
-    studentWallet.lockedBalanceKES = Number((studentWallet.lockedBalanceKES - totalRefundToSponsor).toFixed(2));
-    await studentWallet.save({ session });
 
     // Credit sponsor's available balance (sponsor wallet has no locked funds)
     await walletService.creditWallet(

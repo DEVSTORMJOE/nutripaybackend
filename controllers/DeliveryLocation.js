@@ -7,14 +7,8 @@ function clean(value) {
 
 function validateLocation(body) {
   const hostelResidence = clean(body.hostelResidence);
-  const block = clean(body.block);
-  const room = clean(body.room);
-  const landmark = clean(body.landmark);
 
   if (!hostelResidence) return "Hostel / Residence is required.";
-  if (!block) return "Block is required.";
-  if (!room) return "Room is required.";
-  if (!landmark) return "Landmark is required.";
 
   return "";
 }
@@ -84,9 +78,9 @@ async function createDeliveryLocation(req, res) {
       university: clean(req.body.university) || "Egerton University",
       campus: clean(req.body.campus) || "Njoro Main Campus",
       hostelResidence: clean(req.body.hostelResidence),
-      block: clean(req.body.block),
-      room: clean(req.body.room),
-      landmark: clean(req.body.landmark),
+      block: clean(req.body.block) || "",
+      room: clean(req.body.room) || "",
+      landmark: clean(req.body.landmark) || "",
       isActive:
         typeof req.body.isActive === "boolean" ? req.body.isActive : true,
     };
@@ -95,9 +89,6 @@ async function createDeliveryLocation(req, res) {
       university: payload.university,
       campus: payload.campus,
       hostelResidence: payload.hostelResidence,
-      block: payload.block,
-      room: payload.room,
-      landmark: payload.landmark,
     });
 
     if (duplicate) {

@@ -105,12 +105,35 @@ const getOrders = async (req, res) => {
     const vendorRecord = await Vendor.findOne({ user: req.user.id });
     if (!vendorRecord) return res.json([]);
 
-    const deliveries = await Delivery.find({ vendor: vendorRecord._id })
-      .populate('student', 'name email');
+    const deliveries = await Delivery.find({ vendor: vendorRecord._id, isCustom: { $ne: true } })
+      .populate('student', 'name email')
+      .populate('deliveryAgent', 'name email phone')
+      .populate('deliveryLocation', 'hostelResidence campus university')
+      .sort({ createdAt: -1 });
 
     res.json(deliveries);
   } catch (error) {
     console.error(error);
+    res.status(500).json({ message: 'Server Error' });
+  }
+};
+
+// @desc    Get custom/quick orders (deliveries) for the vendor
+// @route   GET /api/vendor/orders/quick
+// @access  Private (Vendor)
+const getQuickOrders = async (req, res) => {
+  try {
+    const vendorRecord = await Vendor.findOne({ user: req.user.id });
+    if (!vendorRecord) return res.status(404).json({ message: 'Vendor profile not found' });
+
+    const deliveries = await Delivery.find({ vendor: vendorRecord._id, isCustom: true })
+      .populate('student', 'name email phone')
+      .populate('deliveryAgent', 'name email')
+      .sort({ createdAt: -1 });
+
+    res.json(deliveries);
+  } catch (error) {
+    console.error("Get Vendor Quick Orders Error:", error);
     res.status(500).json({ message: 'Server Error' });
   }
 };
@@ -174,7 +197,63 @@ const updateOrderStatus = async (req, res) => {
       }
     }
 
-    delivery.status = status;
+    if (status === 'ready') {
+      if (!delivery.deliveryVerificationCode) {
+        const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+        const part1 = Array.from({ length: 4 }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
+        const part2 = Array.from({ length: 3 }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
+        delivery.deliveryVerificationCode = `NP-${part1}-${part2}`;
+        
+        const expiry = new Date();
+        expiry.setHours(23, 59, 59, 999);
+        delivery.deliveryVerificationExpiry = expiry;
+      }
+
+      // Auto-assign approved driver mapped to this student's hostel delivery location
+      if (!delivery.deliveryAgent) {
+        const DeliveryPersonnel = require('../models/DeliveryPersonnel');
+        const DeliveryLocation = require('../models/DeliveryLocation');
+
+        let locId = delivery.deliveryLocation;
+
+        // Fallback: if no deliveryLocation ObjectId but location string exists, resolve it
+        if (!locId && delivery.location) {
+          const dl = await DeliveryLocation.findOne({
+            hostelResidence: new RegExp('^' + delivery.location.trim().split(/\s+/)[0], 'i')
+          });
+          if (dl) {
+            locId = dl._id;
+            delivery.deliveryLocation = dl._id;
+            console.log(`[AutoAssign] Resolved location string "${delivery.location}" to DeliveryLocation: ${dl._id}`);
+          }
+        }
+
+        if (locId) {
+          const assignedStaff = await DeliveryPersonnel.findOne({
+            assignedLocations: locId,
+            approvedStatus: 'approved'
+          });
+          if (assignedStaff) {
+            delivery.deliveryAgent = assignedStaff.user;
+            console.log(`[AutoAssign] Driver auto-assigned: userId=${assignedStaff.user} for location=${locId}`);
+          } else {
+            console.warn(`[AutoAssign] No approved driver found for location=${locId}`);
+          }
+        } else {
+          console.warn(`[AutoAssign] No deliveryLocation found on order ${delivery._id}`);
+        }
+      }
+
+      // If a driver is now set (either previously or newly assigned), automatically advance status to 'assigned'
+      if (delivery.deliveryAgent) {
+        delivery.status = 'assigned';
+      } else {
+        delivery.status = 'ready';
+      }
+    } else {
+      delivery.status = status;
+    }
+
     await delivery.save();
 
     res.json(delivery);
@@ -385,6 +464,7 @@ module.exports = {
   createMeal,
   getMeals,
   getOrders,
+  getQuickOrders,
   updateOrderStatus,
   getDeliveryStaff,
   registerDeliveryStaff,

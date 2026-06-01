@@ -200,6 +200,12 @@ const studentSchema = new mongoose.Schema(
       default: "",
     },
 
+    floor: {
+      type: String,
+      trim: true,
+      default: "",
+    },
+
     room: {
       type: String,
       trim: true,

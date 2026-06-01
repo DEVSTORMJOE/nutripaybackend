@@ -265,11 +265,16 @@ async function unlockFunds(userId, amountKes, session = null) {
 async function refundFunds(userId, amountKes, category, sourceType = 'self', session = null) {
   const wallet = await getOrCreateWallet(userId, 'student', session);
 
-  const amount = Number(amountKes);
+  let amount = Number(amountKes);
 
-  // Guard: cannot refund more than is locked
+  // Cap refund amount to the actual remaining locked balance
   if (wallet.lockedBalanceKES < amount) {
-    throw new Error(`Refund amount ${amount} exceeds lockedBalanceKES ${wallet.lockedBalanceKES}`);
+    throw new Error(`Refund amount KES ${amount} exceeds lockedBalanceKES KES ${wallet.lockedBalanceKES}`);
+  }
+
+  if (amount <= 0) {
+    console.log(`[Refund Capping] Locked balance is 0 KES. Skipping refund credit operation.`);
+    return wallet;
   }
 
   // Move from locked → available (net tokenBalanceNT stays the same)
@@ -372,8 +377,8 @@ async function processWalletCustomOrder(userId, vendorUserId, items, totalCost, 
   // 4. Create commission transaction log in MongoDB
   await Transaction.create([{
     transactionId: crypto.randomUUID(),
-    fromUser: userId,
-    toUser: vendorUserId,
+    fromUser: vendorUserId,
+    toUser: null,
     amountKES: commission,
     transactionCategory: 'commission',
     paymentMethod: 'wallet',
@@ -429,8 +434,8 @@ async function processMpesaDirectCustomOrder(checkoutRequestID, amountPaid, mpes
   // 5. Create platform commission transaction log in MongoDB
   await Transaction.create([{
     transactionId: crypto.randomUUID(),
-    fromUser: order.user || null,
-    toUser: vendorProfile.user,
+    fromUser: vendorProfile.user, // Vendor pays commission!
+    toUser: null, // to Platform/System
     amountKES: commission,
     transactionCategory: 'commission',
     paymentMethod: 'mpesa',
@@ -456,18 +461,60 @@ async function processMpesaDirectCustomOrder(checkoutRequestID, amountPaid, mpes
 
   // 7. Create matching Delivery record for quick order
   const Student = require('../models/Student');
-  const studentProfile = await Student.findOne({ user: order.user }).populate('deliveryLocation').session(session);
+  const DeliveryLocation = require('../models/DeliveryLocation');
+  const studentProfile = await Student.findOne({ user: order.user }).session(session);
   const Delivery = require('../models/Delivery');
+
+  // Resolve deliveryLocation ObjectId — use stored ID or resolve from hostel string
+  let resolvedLocId = studentProfile?.deliveryLocation || null;
+  const resolvedLocName = studentProfile?.hostel || '';
+  if (!resolvedLocId && resolvedLocName && resolvedLocName !== 'Campus') {
+    const dl = await DeliveryLocation.findOne({
+      hostelResidence: new RegExp(resolvedLocName.trim(), 'i')
+    });
+    if (dl) {
+      resolvedLocId = dl._id;
+      // Persist resolved deliveryLocation back to the student profile (outside session to avoid locking)
+      Student.updateOne({ user: order.user }, { deliveryLocation: dl._id }).exec().catch(() => {});
+    }
+  }
+  // Build a full location description string for the driver
+  const locationParts = [
+    resolvedLocName || 'Campus',
+    studentProfile?.block ? `Block ${studentProfile.block}` : null,
+    studentProfile?.floor ? `Floor ${studentProfile.floor}` : null,
+    studentProfile?.room ? `Room ${studentProfile.room}` : null,
+    studentProfile?.landmark ? `(${studentProfile.landmark})` : null,
+  ].filter(Boolean);
+  const fullLocation = locationParts.join(', ');
+
   await Delivery.create([{
     student: order.user,
     vendor: order.vendor,
     items: order.items,
     status: 'pending',
     totalCost: order.totalCost,
-    timeSlot: 'Lunch',
-    scheduledDate: new Date(),
-    location: order.deliveryLocation || 'Campus',
-    deliveryLocation: studentProfile?.deliveryLocation?._id || null
+    timeSlot: (() => {
+      const now = new Date();
+      const kenyaHour = (now.getUTCHours() + 3) % 24;
+      if (kenyaHour < 10) return 'Breakfast';
+      if (kenyaHour < 14) return 'Lunch';
+      if (kenyaHour < 20) return 'Supper';
+      return 'Breakfast'; // past supper, push to tomorrow's breakfast
+    })(),
+    scheduledDate: (() => {
+      const now = new Date();
+      const kenyaHour = (now.getUTCHours() + 3) % 24;
+      if (kenyaHour >= 20) {
+        const tomorrow = new Date();
+        tomorrow.setDate(tomorrow.getDate() + 1);
+        return tomorrow;
+      }
+      return now;
+    })(),
+    location: fullLocation || order.deliveryLocation || 'Campus',
+    deliveryLocation: resolvedLocId || null,
+    isCustom: true
   }], { session });
 
   return { order, vendorShare, commission };

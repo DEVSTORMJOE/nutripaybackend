@@ -200,7 +200,7 @@ const optOut = async (req, res) => {
 // @access  Private (Student)
 const getDeliverySchedule = async (req, res) => {
   try {
-    const deliveries = await Delivery.find({ student: req.user.id }).sort({ scheduledDate: 1 });
+    const deliveries = await Delivery.find({ student: req.user.id, isCustom: { $ne: true } }).sort({ scheduledDate: 1 });
     res.json(deliveries);
   } catch (error) {
     console.error(error);
@@ -651,6 +651,54 @@ const getMyRefundRequests = async (req, res) => {
   }
 };
 
+// @desc    Get custom/quick orders for the authenticated student
+// @route   GET /api/student/quick-orders
+// @access  Private (Student)
+const getQuickOrders = async (req, res) => {
+  try {
+    const Delivery = require('../models/Delivery');
+    const { page = 1, limit = 10, search = "", status = "" } = req.query;
+    
+    const query = { student: req.user.id, isCustom: true };
+    
+    if (status) {
+      query.status = status;
+    }
+    
+    if (search) {
+      query.$or = [
+        { 'items.name': { $regex: search, $options: 'i' } }
+      ];
+    }
+    
+    const skip = (Number(page) - 1) * Number(limit);
+    const total = await Delivery.countDocuments(query);
+    const orders = await Delivery.find(query)
+      .populate('deliveryAgent', 'name email')
+      .populate({
+        path: 'vendor',
+        populate: { path: 'user', select: 'name' }
+      })
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(Number(limit))
+      .lean();
+      
+    res.json({
+      orders,
+      pagination: {
+        total,
+        page: Number(page),
+        limit: Number(limit),
+        pages: Math.ceil(total / Number(limit))
+      }
+    });
+  } catch (error) {
+    console.error("Get Quick Orders Error:", error);
+    res.status(500).json({ message: "Failed to fetch quick orders: " + error.message });
+  }
+};
+
 module.exports = {
   getDashboard,
   selectMeal,
@@ -664,5 +712,6 @@ module.exports = {
   getMealChangeAlternatives,
   changeMeal,
   getMyRefundRequests,
+  getQuickOrders,
 };
 

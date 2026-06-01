@@ -135,18 +135,60 @@ const createCustomOrder = async (req, res) => {
 
       // Inherit student hostel DeliveryLocation and create immediate Delivery record
       const Student = require('../models/Student');
-      const studentProfile = await Student.findOne({ user: user._id }).populate('deliveryLocation');
+      const DeliveryLocation = require('../models/DeliveryLocation');
+      const studentProfile = await Student.findOne({ user: user._id });
       const Delivery = require('../models/Delivery');
+
+      // Resolve deliveryLocation ObjectId — use stored ID or resolve from hostel string
+      let resolvedLocId = studentProfile?.deliveryLocation || null;
+      let resolvedLocName = studentProfile?.hostel || '';
+      if (!resolvedLocId && resolvedLocName && resolvedLocName !== 'Campus') {
+        const dl = await DeliveryLocation.findOne({
+          hostelResidence: new RegExp(resolvedLocName.trim(), 'i')
+        });
+        if (dl) {
+          resolvedLocId = dl._id;
+          // Persist the resolved deliveryLocation back to the student profile
+          await Student.updateOne({ user: user._id }, { deliveryLocation: dl._id });
+        }
+      }
+      // Build a full location description string for the driver
+      const locationParts = [
+        resolvedLocName || 'Campus',
+        studentProfile?.block ? `Block ${studentProfile.block}` : null,
+        studentProfile?.floor ? `Floor ${studentProfile.floor}` : null,
+        studentProfile?.room ? `Room ${studentProfile.room}` : null,
+        studentProfile?.landmark ? `(${studentProfile.landmark})` : null,
+      ].filter(Boolean);
+      const fullLocation = locationParts.join(', ');
+
       await Delivery.create({
         student: user._id,
         vendor: targetVendorId,
         items: items,
         status: 'pending',
         totalCost: totalCost,
-        timeSlot: 'Lunch', // Default quick order timeslot
-        scheduledDate: new Date(),
-        location: deliveryLocation || user.location || 'Campus',
-        deliveryLocation: studentProfile?.deliveryLocation?._id || null
+        timeSlot: (() => {
+          const now = new Date();
+          const kenyaHour = (now.getUTCHours() + 3) % 24;
+          if (kenyaHour < 10) return 'Breakfast';
+          if (kenyaHour < 14) return 'Lunch';
+          if (kenyaHour < 20) return 'Supper';
+          return 'Breakfast'; // past supper cutoff, push to breakfast
+        })(),
+        scheduledDate: (() => {
+          const now = new Date();
+          const kenyaHour = (now.getUTCHours() + 3) % 24;
+          if (kenyaHour >= 20) {
+            const tomorrow = new Date();
+            tomorrow.setDate(tomorrow.getDate() + 1);
+            return tomorrow;
+          }
+          return now;
+        })(),
+        location: fullLocation || deliveryLocation || 'Campus',
+        deliveryLocation: resolvedLocId || null,
+        isCustom: true
       });
 
       // Notify Vendor
@@ -235,6 +277,25 @@ const checkCustomOrderStatus = async (req, res) => {
     const order = await CustomOrder.findOne({ checkoutRequestID: reference });
     if (!order) {
       return res.status(404).json({ message: "Custom order not found." });
+    }
+
+    // Auto-approve mock sandbox checkouts immediately upon polling
+    if (reference.startsWith("ws_CO_Mock_") && order.status === "pending_payment") {
+      console.log(`[Mock STK Push] Auto-approving mock custom order: ${order.orderId}`);
+      await walletService.processMpesaDirectCustomOrder(
+        reference,
+        order.totalCost,
+        "MOCK_STK_" + Math.random().toString(36).substring(4).toUpperCase(),
+        "254700000000"
+      );
+      
+      const updated = await CustomOrder.findById(order._id);
+      return res.json({
+        orderId: updated.orderId,
+        status: updated.status,
+        totalCost: updated.totalCost,
+        paymentMethod: updated.paymentMethod
+      });
     }
 
     res.json({

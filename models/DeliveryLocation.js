@@ -23,19 +23,16 @@ const deliveryLocationSchema = new mongoose.Schema(
 
     block: {
       type: String,
-      required: true,
       trim: true,
     },
 
     room: {
       type: String,
-      required: true,
       trim: true,
     },
 
     landmark: {
       type: String,
-      required: true,
       trim: true,
     },
 

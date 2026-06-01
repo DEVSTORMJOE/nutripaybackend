@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { getDashboard, createMeal, getMeals, getOrders, updateOrderStatus, getDeliveryStaff, registerDeliveryStaff, submitMealForApproval, getOrderChangesLog } = require('../controllers/vendorController');
+const { getDashboard, createMeal, getMeals, getOrders, getQuickOrders, updateOrderStatus, getDeliveryStaff, registerDeliveryStaff, submitMealForApproval, getOrderChangesLog } = require('../controllers/vendorController');
 const { protect } = require('../middleware/authMiddleware');
 const { role } = require('../middleware/roleMiddleware');
 
@@ -9,6 +9,7 @@ router.post('/meals', protect, role('vendor'), createMeal);
 router.get('/meals', protect, role('vendor'), getMeals); // Public? Or just vendor's? Let's make it vendor's list for management
 router.patch('/meals/:id/submit', protect, role('vendor'), submitMealForApproval);
 router.get('/orders', protect, role('vendor'), getOrders);
+router.get('/orders/quick', protect, role('vendor'), getQuickOrders);
 router.get('/orders/meal-changes', protect, role('vendor'), getOrderChangesLog);
 router.put('/orders/:id', protect, role('vendor'), updateOrderStatus);
 router.get('/delivery-staff', protect, role('vendor'), getDeliveryStaff);

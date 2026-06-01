@@ -182,11 +182,54 @@ const getAssignedDeliveries = async (req, res) => {
   }
 };
 
+// @desc    Confirm food pickup (assigned → picked_up)
+// @route   PUT /api/delivery/pickup/:id
+// @access  Private (Delivery)
+const confirmPickup = async (req, res) => {
+  try {
+    const DeliveryPersonnel = require("../models/DeliveryPersonnel");
+    const driver = await DeliveryPersonnel.findOne({ user: req.user.id });
+    const assignedLocationIds = driver ? driver.assignedLocations || [] : [];
+
+    const delivery = await Delivery.findOne({
+      _id: req.params.id,
+      $or: [
+        { deliveryAgent: req.user.id },
+        { deliveryLocation: { $in: assignedLocationIds } }
+      ]
+    });
+
+    if (!delivery) return res.status(404).json({ message: "Delivery not found or not assigned to you." });
+    if (delivery.status === "delivered") return res.status(400).json({ message: "Order already delivered." });
+    if (delivery.status === "picked_up") return res.status(400).json({ message: "Order already marked as picked up." });
+
+    delivery.status = "picked_up";
+    delivery.deliveryAgent = req.user.id; // Ensure agent is set
+    await delivery.save();
+
+    // Notify vendor
+    const Notification = require("../models/Notification");
+    if (delivery.vendor) {
+      await Notification.create({
+        user: delivery.vendor,
+        type: "alert",
+        title: "Order Picked Up 🚴",
+        message: `Driver ${req.user.name || "Driver"} has picked up order #${String(delivery._id).slice(-6)}. Food is now in transit.`
+      });
+    }
+
+    res.json({ message: "Pickup confirmed. Order is now in transit.", status: delivery.status });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: "Server Error" });
+  }
+};
+
 // @desc    Mark delivery as complete
 // @route   POST /api/delivery/complete
 // @access  Private (Delivery)
 const markDelivered = async (req, res) => {
-  const { deliveryId } = req.body;
+  const { deliveryId, code } = req.body;
 
   try {
     const DeliveryPersonnel = require("../models/DeliveryPersonnel");
@@ -208,10 +251,29 @@ const markDelivered = async (req, res) => {
 
     if (!delivery) return res.status(404).json({ message: "Delivery not found" });
 
+    if (delivery.status === "delivered") {
+      return res.status(400).json({ message: "Order is already delivered." });
+    }
+
+    if (!delivery.deliveryVerificationCode) {
+      return res.status(400).json({ message: "No delivery verification code exists for this order." });
+    }
+
+    const providedCode = String(code || "").trim().toUpperCase();
+    const actualCode = String(delivery.deliveryVerificationCode).trim().toUpperCase();
+
+    if (providedCode !== actualCode) {
+      return res.status(400).json({ message: "Invalid delivery verification code. Access Denied." });
+    }
+
+    if (delivery.deliveryVerificationExpiry && new Date() > new Date(delivery.deliveryVerificationExpiry)) {
+      return res.status(400).json({ message: "Delivery verification code has expired." });
+    }
+
     // Link the completing driver
     delivery.deliveryAgent = req.user.id;
 
-    const wasAlreadyDelivered = delivery.status === "delivered";
+    const wasAlreadyDelivered = false;
 
     // ===== New hybrid custodial payout logic =====
     if (!wasAlreadyDelivered) {

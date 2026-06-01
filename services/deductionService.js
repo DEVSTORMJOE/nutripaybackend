@@ -98,7 +98,8 @@ const processDailyDeductions = async () => {
 
       await Transaction.create({
         transactionId: crypto.randomUUID(),
-        fromUser: sub.student._id,
+        fromUser: vendorProfile.user, // Vendor pays commission!
+        toUser: null, // to Platform/System
         amountKES: commission,
         transactionCategory: 'commission',
         paymentMethod: 'stellar',

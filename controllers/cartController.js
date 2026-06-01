@@ -610,7 +610,7 @@ async function customPlanCheckout(req, res) {
 
     // Create an active Subscription record
     const Subscription = require('../models/Subscription');
-    const today = new Date();
+    const today = req.body.startDate ? new Date(req.body.startDate) : new Date();
     const endDate = new Date(today.getTime() + daysCount * 24 * 60 * 60 * 1000);
     const subscription = await Subscription.create({
       student: userId,

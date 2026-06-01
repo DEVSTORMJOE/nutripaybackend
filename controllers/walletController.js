@@ -29,14 +29,26 @@ const getWalletBalance = async (req, res) => {
 // @access  Private
 const getTransactions = async (req, res) => {
   try {
+    const { explainTransaction } = require('../utils/transactionUtils');
     const transactions = await Transaction.find({
       $or: [{ fromUser: req.user.id }, { toUser: req.user.id }]
     })
     .populate('fromUser', 'name email role')
     .populate('toUser', 'name email role')
-    .sort({ createdAt: -1 });
+    .sort({ createdAt: -1 })
+    .lean();
 
-    res.json(transactions);
+    const mapped = transactions.map(tx => {
+      const { source, destination, purpose } = explainTransaction(tx);
+      return {
+        ...tx,
+        source,
+        destination,
+        purpose
+      };
+    });
+
+    res.json(mapped);
   } catch (error) {
     console.error("Get Wallet Transactions Error:", error);
     res.status(500).json({ message: 'Server Error' });

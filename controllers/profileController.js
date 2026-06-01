@@ -149,6 +149,7 @@ async function updateProfile(req, res) {
       if (profileData.campus !== undefined) studentUpdates.campus = profileData.campus;
       if (profileData.hostel !== undefined) studentUpdates.hostel = profileData.hostel;
       if (profileData.block !== undefined) studentUpdates.block = profileData.block;
+      if (profileData.floor !== undefined) studentUpdates.floor = profileData.floor;
       if (profileData.room !== undefined) studentUpdates.room = profileData.room;
       if (profileData.landmark !== undefined) studentUpdates.landmark = profileData.landmark;
       if (profileData.deliveryLocation !== undefined) studentUpdates.deliveryLocation = profileData.deliveryLocation || null;

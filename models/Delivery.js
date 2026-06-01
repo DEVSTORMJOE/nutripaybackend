@@ -44,6 +44,11 @@ const deliverySchema = new mongoose.Schema({
     required: true
   },
   deliveredAt: Date,
+  deliveryVerificationCode: {
+    type: String,
+    sparse: true
+  },
+  deliveryVerificationExpiry: Date,
   location: String,
   deliveryLocation: {
     type: mongoose.Schema.Types.ObjectId,
@@ -58,6 +63,10 @@ const deliverySchema = new mongoose.Schema({
     type: Boolean,
     default: false
   },
+  isCustom: {
+    type: Boolean,
+    default: false
+  },
   claimedAt: Date
 }, { timestamps: true });
 
@@ -65,14 +74,22 @@ deliverySchema.pre('save', async function (next) {
   if (this.status === 'pending' && !this.deliveryAgent) {
     try {
       const DeliveryPersonnel = mongoose.model('DeliveryPersonnel');
+      const DeliveryLocation = mongoose.model('DeliveryLocation');
       let locId = this.deliveryLocation;
       
       // If deliveryLocation is not set but location (hostel name) is set, find the delivery location document
-      if (!locId && this.location) {
-        const DeliveryLocation = mongoose.model('DeliveryLocation');
-        const dl = await DeliveryLocation.findOne({
+      if (!locId && this.location && this.location !== 'Campus') {
+        // Try exact match first
+        let dl = await DeliveryLocation.findOne({
           hostelResidence: new RegExp('^' + this.location.trim() + '$', 'i')
         });
+        // Fallback: partial match (hostel name contains the location string or vice versa)
+        if (!dl) {
+          const firstWord = this.location.trim().split(/\s+/)[0];
+          dl = await DeliveryLocation.findOne({
+            hostelResidence: new RegExp(firstWord, 'i')
+          });
+        }
         if (dl) {
           locId = dl._id;
           this.deliveryLocation = dl._id;
