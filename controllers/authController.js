@@ -2813,9 +2813,12 @@ async function sendSponsorOTP(req, res) {
 
     let user = await User.findOne({ email: cleanEmail });
     if (!user) {
+      const crypto = require("crypto");
+      const generatedPassword = crypto.randomBytes(8).toString("hex");
       user = await User.create({
         name: "Sponsor",
         email: cleanEmail,
+        password: generatedPassword,
         role: "sponsor",
         isApproved: true
       });

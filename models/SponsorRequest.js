@@ -35,6 +35,19 @@ const sponsorRequestSchema = new mongoose.Schema({
     type: String,
     enum: ['pending', 'paid', 'expired'],
     default: 'pending'
+  },
+  planId: {
+    type: String,
+    default: 'essential'
+  },
+  startDate: {
+    type: Date
+  },
+  endDate: {
+    type: Date
+  },
+  checkoutRequestID: {
+    type: String
   }
 }, { timestamps: true });
 

@@ -91,7 +91,7 @@ const getSponsoredStudents = async (req, res) => {
       const deliveries = await Delivery.find({ 
         student: student._id, 
         status: { $in: ['pending', 'preparing', 'ready', 'assigned', 'picked_up', 'delivered'] } 
-      }).sort({ scheduledDate: -1 }).limit(30); // Last 30 deliveries
+      }).sort({ scheduledDate: -1 }); // Get ALL deliveries for complete history
 
       students.push({
         _id: student._id,
@@ -187,6 +187,46 @@ const fundRequest = async (req, res) => {
 
     // Update Deliveries to pending
     await Delivery.updateMany({ _id: { $in: deliveryIds } }, { $set: { status: 'pending' } });
+
+    // Locate the matching SponsorRequest
+    const request = await SponsorRequest.findOne({
+      student: studentId,
+      deliveryIds: { $in: deliveryIds },
+      status: 'pending'
+    });
+
+    if (request) {
+      request.status = 'paid';
+      await request.save();
+    }
+
+    // Set studentProfile.subscriptionActive = true
+    const Student = require('../models/Student');
+    const studentProfile = await Student.findOne({ user: studentId });
+    if (studentProfile) {
+      studentProfile.subscriptionActive = true;
+      await studentProfile.save();
+    }
+
+    // Create an active Subscription record
+    const Subscription = require('../models/Subscription');
+    let planId = 'essential';
+    let startDate = new Date();
+    let endDate = new Date(startDate.getTime() + 27 * 24 * 60 * 60 * 1000);
+    if (request) {
+      planId = request.planId || 'essential';
+      if (request.startDate) startDate = request.startDate;
+      if (request.endDate) endDate = request.endDate;
+    }
+
+    await Subscription.create({
+      student: studentId,
+      planId: planId,
+      status: 'active',
+      startDate: startDate,
+      endDate: endDate,
+      totalPaidKES: totalKes
+    });
     
     // Also notify vendors that we actually got an order (since they were awaiting sponsor)
     const Notification = require('../models/Notification');
@@ -210,7 +250,6 @@ const fundRequest = async (req, res) => {
 
     res.json({
       message: "Successfully funded student deliveries!",
-      txHash: lockResult.transaction.stellarTxHash,
       newBalance: lockResult.studentWallet.availableBalanceKES
     });
   } catch (error) {
@@ -247,11 +286,21 @@ const quickPay = async (req, res) => {
     // Let's resolve sponsor User account or create if missing
     let sponsor = await User.findOne({ email: request.sponsorEmail });
     if (!sponsor) {
+      const crypto = require('crypto');
+      const generatedPassword = crypto.randomBytes(8).toString("hex");
       sponsor = await User.create({
         name: request.sponsorName,
         email: request.sponsorEmail,
+        password: generatedPassword,
         role: 'sponsor',
         isApproved: true
+      });
+
+      const Sponsor = require('../models/Sponsor');
+      await Sponsor.create({
+        user: sponsor._id,
+        organizationName: request.sponsorName || "Sponsor",
+        contactPhone: ""
       });
       
       // Credit mock funds
@@ -307,6 +356,25 @@ const quickPay = async (req, res) => {
     // Update Deliveries status to pending
     await Delivery.updateMany({ _id: { $in: deliveryIds } }, { $set: { status: 'pending' } });
     
+    // Create an active Subscription record
+    const Subscription = require('../models/Subscription');
+    await Subscription.create({
+      student: studentId,
+      planId: request.planId || 'essential',
+      status: 'active',
+      startDate: request.startDate || new Date(),
+      endDate: request.endDate || new Date(Date.now() + 27 * 24 * 60 * 60 * 1000),
+      totalPaidKES: totalKes
+    });
+
+    // Set studentProfile.subscriptionActive = true
+    const Student = require('../models/Student');
+    const studentProfile = await Student.findOne({ user: studentId });
+    if (studentProfile) {
+      studentProfile.subscriptionActive = true;
+      await studentProfile.save();
+    }
+
     // Update SponsorRequest status
     request.status = 'paid';
     await request.save();
@@ -321,6 +389,170 @@ const quickPay = async (req, res) => {
   }
 };
 
+const quickPayMpesa = async (req, res) => {
+  const { token, phone } = req.body;
+  try {
+    if (!phone) {
+      return res.status(400).json({ message: "Phone number is required." });
+    }
+
+    const request = await SponsorRequest.findOne({ token, status: 'pending' });
+    if (!request) return res.status(404).json({ message: "Active sponsorship request not found." });
+
+    // Resolve sponsor or create if missing
+    let sponsor = await User.findOne({ email: request.sponsorEmail });
+    if (!sponsor) {
+      const crypto = require('crypto');
+      const generatedPassword = crypto.randomBytes(8).toString("hex");
+      sponsor = await User.create({
+        name: request.sponsorName,
+        email: request.sponsorEmail,
+        password: generatedPassword,
+        role: 'sponsor',
+        isApproved: true
+      });
+
+      const Sponsor = require('../models/Sponsor');
+      await Sponsor.create({
+        user: sponsor._id,
+        organizationName: request.sponsorName || "Sponsor",
+        contactPhone: ""
+      });
+
+      // Credit mock funds
+      await walletService.creditWallet(
+        sponsor._id,
+        10000,
+        'deposit',
+        'wallet',
+        'Sponsor Mock Funding'
+      );
+    }
+
+    const mpesaService = require('../services/mpesaService');
+    const crypto = require('crypto');
+
+    try {
+      const data = await mpesaService.initiateDeposit(sponsor._id, phone, request.amountKES);
+      const checkoutRequestID = data.CheckoutRequestID;
+      request.checkoutRequestID = checkoutRequestID;
+      await request.save();
+      res.json({ message: "STK Push sent successfully to your phone. Waiting for PIN...", checkoutRequestID });
+    } catch (err) {
+      console.warn("Direct Safaricom STK Push failed, falling back to mock deposit in demo mode:", err.message);
+      const mockID = `ws_CO_Mock_${crypto.randomBytes(8).toString('hex')}`;
+      request.checkoutRequestID = mockID;
+      await request.save();
+      res.json({
+        message: "STK Push mock sent successfully! (Demo Sandbox Mode)",
+        checkoutRequestID: mockID
+      });
+    }
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ message: "M-Pesa payment initiation failed: " + e.message });
+  }
+};
+
+const checkSponsorMpesaStatus = async (req, res) => {
+  try {
+    const { checkoutRequestID } = req.params;
+    const request = await SponsorRequest.findOne({ checkoutRequestID });
+    if (!request) {
+      return res.status(404).json({ message: "Sponsorship request not found" });
+    }
+
+    // Auto-approve mock deposits in sandbox/demo environment immediately upon polling
+    if (request.status === 'pending' && (checkoutRequestID.startsWith('ws_CO_Mock_') || process.env.NODE_ENV === 'development')) {
+      console.log(`[Mock Sponsor Deposit] Auto-approving mock deposit of ${request.amountKES} KES`);
+      const mockReceipt = "MOCK_DEP_" + Math.random().toString(36).substring(4).toUpperCase();
+      
+      let sponsor = await User.findOne({ email: request.sponsorEmail });
+      if (!sponsor) {
+        const crypto = require('crypto');
+        const generatedPassword = crypto.randomBytes(8).toString("hex");
+        sponsor = await User.create({
+          name: request.sponsorName,
+          email: request.sponsorEmail,
+          password: generatedPassword,
+          role: 'sponsor',
+          isApproved: true
+        });
+
+        const Sponsor = require('../models/Sponsor');
+        await Sponsor.create({
+          user: sponsor._id,
+          organizationName: request.sponsorName || "Sponsor",
+          contactPhone: ""
+        });
+      }
+
+      // Credit sponsor wallet
+      await walletService.creditWallet(
+        sponsor._id,
+        request.amountKES,
+        'deposit',
+        'mpesa',
+        `M-Pesa Sponsor Payment (Receipt: ${mockReceipt})`
+      );
+
+      // Debit sponsor wallet
+      await walletService.debitWallet(
+        sponsor._id,
+        request.amountKES,
+        'funding',
+        'wallet',
+        `Subscription quick sponsor funding for student: ${request.student}`
+      );
+
+      // Credit student wallet
+      const creditRes = await walletService.creditWallet(
+        request.student,
+        request.amountKES,
+        'funding',
+        'wallet',
+        `Sponsor request funding from sponsor: ${sponsor._id}`
+      );
+      creditRes.transaction.paymentSource = 'sponsor_funds';
+      await creditRes.transaction.save();
+
+      // Immediately lock subscription funds
+      const lockResult = await escrowService.lockSubscriptionFunds(request.student, request.amountKES, sponsor._id);
+
+      // Update Deliveries status to pending
+      await Delivery.updateMany({ _id: { $in: request.deliveryIds } }, { $set: { status: 'pending' } });
+
+      // Create active subscription
+      const Subscription = require('../models/Subscription');
+      await Subscription.create({
+        student: request.student,
+        planId: request.planId || 'essential',
+        status: 'active',
+        startDate: request.startDate || new Date(),
+        endDate: request.endDate || new Date(Date.now() + 27 * 24 * 60 * 60 * 1000),
+        totalPaidKES: request.amountKES
+      });
+
+      // Set student profile subscription active
+      const Student = require('../models/Student');
+      const studentProfile = await Student.findOne({ user: request.student });
+      if (studentProfile) {
+        studentProfile.subscriptionActive = true;
+        await studentProfile.save();
+      }
+
+      // Mark request as paid
+      request.status = 'paid';
+      await request.save();
+    }
+
+    res.json({ status: request.status, amount: request.amountKES });
+  } catch (e) {
+    console.error("Sponsor status check error:", e);
+    res.status(500).json({ message: "Internal server error" });
+  }
+};
+
 module.exports = {
   getDashboard,
   fundStudentWallet,
@@ -328,5 +560,7 @@ module.exports = {
   getPendingRequests,
   fundRequest,
   getRequestDetails,
-  quickPay
+  quickPay,
+  quickPayMpesa,
+  checkSponsorMpesaStatus
 };

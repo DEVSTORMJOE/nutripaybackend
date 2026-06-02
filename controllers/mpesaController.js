@@ -59,6 +59,124 @@ const mpesaCallback = async (req, res) => {
         const callbackVerification = mpesaService.verifyCallback(req.body);
         const { checkoutRequestID } = callbackVerification;
 
+        // Check if this callback corresponds to a SponsorRequest
+        const SponsorRequest = require('../models/SponsorRequest');
+        const sponsorRequest = await SponsorRequest.findOne({ checkoutRequestID });
+
+        if (sponsorRequest) {
+            const User = require('../models/User');
+            if (!callbackVerification.success) {
+                console.log(`M-Pesa STK Push for sponsor request ${sponsorRequest.token} failed or cancelled.`);
+                sponsorRequest.status = 'failed';
+                await sponsorRequest.save();
+                return res.json({ ResponseCode: "0", ResponseDesc: "Success" });
+            }
+
+            // Successfully paid sponsor request!
+            const { amountPaid, mpesaReceiptNumber, phonePaidFrom } = callbackVerification;
+
+            let sponsor = await User.findOne({ email: sponsorRequest.sponsorEmail });
+            if (!sponsor) {
+                const crypto = require('crypto');
+                const generatedPassword = crypto.randomBytes(8).toString("hex");
+                sponsor = await User.create({
+                    name: sponsorRequest.sponsorName,
+                    email: sponsorRequest.sponsorEmail,
+                    password: generatedPassword,
+                    role: 'sponsor',
+                    isApproved: true
+                });
+
+                const Sponsor = require('../models/Sponsor');
+                await Sponsor.create({
+                    user: sponsor._id,
+                    organizationName: sponsorRequest.sponsorName || "Sponsor",
+                    contactPhone: ""
+                });
+            }
+
+            // Credit sponsor wallet
+            await walletService.creditWallet(
+                sponsor._id,
+                amountPaid,
+                'deposit',
+                'mpesa',
+                `M-Pesa Sponsor Payment (Receipt: ${mpesaReceiptNumber})`
+            );
+
+            // Debit sponsor wallet
+            await walletService.debitWallet(
+                sponsor._id,
+                amountPaid,
+                'funding',
+                'wallet',
+                `Subscription quick sponsor funding for student: ${sponsorRequest.student}`
+            );
+
+            // Credit student wallet
+            const creditRes = await walletService.creditWallet(
+                sponsorRequest.student,
+                amountPaid,
+                'funding',
+                'wallet',
+                `Sponsor request funding from sponsor: ${sponsor._id}`
+            );
+            creditRes.transaction.paymentSource = 'sponsor_funds';
+            await creditRes.transaction.save();
+
+            // Immediately lock subscription funds
+            const lockResult = await escrowService.lockSubscriptionFunds(sponsorRequest.student, amountPaid, sponsor._id);
+
+            // Update Deliveries status to pending
+            const Delivery = require('../models/Delivery');
+            await Delivery.updateMany({ _id: { $in: sponsorRequest.deliveryIds } }, { $set: { status: 'pending' } });
+
+            // Create active subscription
+            const Subscription = require('../models/Subscription');
+            await Subscription.create({
+                student: sponsorRequest.student,
+                planId: sponsorRequest.planId || 'essential',
+                status: 'active',
+                startDate: sponsorRequest.startDate || new Date(),
+                endDate: sponsorRequest.endDate || new Date(Date.now() + 27 * 24 * 60 * 60 * 1000),
+                totalPaidKES: amountPaid
+            });
+
+            // Set student profile subscription active
+            const Student = require('../models/Student');
+            const studentProfile = await Student.findOne({ user: sponsorRequest.student });
+            if (studentProfile) {
+                studentProfile.subscriptionActive = true;
+                await studentProfile.save();
+            }
+
+            // Mark request as paid
+            sponsorRequest.status = 'paid';
+            await sponsorRequest.save();
+
+            // COMPULSORY On-chain settlement: Mint equivalent custom tokens
+            let stellarTxHash = "";
+            let settlementStatus = "pending";
+            try {
+                const stellarTreasuryService = require('../services/stellarTreasuryService');
+                stellarTxHash = await stellarTreasuryService.mintNT(amountPaid);
+                settlementStatus = "synced";
+                console.log("✅ Sponsor order direct on-chain minting successful. Tx Hash:", stellarTxHash);
+            } catch (err) {
+                console.error("❌ Sponsor order direct on-chain minting failed. Marked failed for retry queue:", err.message);
+                settlementStatus = "failed";
+            }
+
+            // Update transaction record
+            if (creditRes && creditRes.transaction) {
+                creditRes.transaction.stellarTxHash = stellarTxHash || null;
+                creditRes.transaction.settlementStatus = settlementStatus;
+                await creditRes.transaction.save();
+            }
+
+            return res.json({ ResponseCode: "0", ResponseDesc: "Success" });
+        }
+
         // Check if this callback corresponds to an instant custom order
         const CustomOrder = require('../models/CustomOrder');
         const customOrder = await CustomOrder.findOne({ checkoutRequestID });

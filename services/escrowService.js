@@ -30,23 +30,12 @@ async function lockSubscriptionFunds(studentId, amountKes, sponsorId = null, ses
     settlementStatus = "failed";
   }
 
-  // Create locking transaction
-  const tx = await Transaction.create([{
-    transactionId: crypto.randomUUID(),
-    fromUser: funderId,
-    toUser: studentId,
-    amountKES: amountKes,
-    transactionCategory: 'subscription_lock',
-    paymentMethod: 'wallet',
-    paymentSource: sponsorId ? 'sponsor_funds' : 'student_wallet',
-    orderType: 'subscription',
-    stellarTxHash: stellarTxHash || null,
-    status: 'completed',
-    settlementStatus: settlementStatus,
-    description: `Subscription lock of ${amountKes} KES for student`
-  }], { session });
+  // NOTE: We do NOT create a separate transaction for the lock operation.
+  // The lock is an internal wallet balance transfer (available -> locked) within the student's wallet.
+  // It's not a money flow between users, so it doesn't warrant a separate transaction record.
+  // The funding transaction (sponsor -> student) already records the money movement.
 
-  return { studentWallet, transaction: tx[0] };
+  return { studentWallet, transaction: null };
 }
 
 /**

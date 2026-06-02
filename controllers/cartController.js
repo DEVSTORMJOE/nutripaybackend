@@ -281,7 +281,6 @@ async function checkoutCart(req, res) {
 
       return res.json({
         ok: true,
-        txHash: lockResult.transaction.stellarTxHash,
         newBalance: lockResult.studentWallet.availableBalanceKES,
         subscription
       });
@@ -403,7 +402,6 @@ async function checkoutCart(req, res) {
 
     return res.json({
       ok: true,
-      txHash: lockResult.transaction.stellarTxHash,
       newBalance: lockResult.studentWallet.availableBalanceKES
     });
   } catch (e) {
@@ -534,54 +532,202 @@ async function addSponsorCheckout(req, res) {
     }
 
     // Emitting the awaiting_sponsor deliveries for the Sponsor
-    const mealIdsToFetch = new Set();
-    for (const date of Object.keys(cart.schedule)) {
-      const day = cart.schedule[date];
-      if (!day) continue;
-      if (day.main && day.main.mealId) mealIdsToFetch.add(day.main.mealId.toString());
-      if (day.drink && day.drink.mealId) mealIdsToFetch.add(day.drink.mealId.toString());
-      if (day.fruit && day.fruit.mealId) mealIdsToFetch.add(day.fruit.mealId.toString());
-    }
-
-    const fetchedMeals = await Meal.find({ _id: { $in: Array.from(mealIdsToFetch) } }).lean();
-    const mealVendorMap = {};
-    for (const m of fetchedMeals) {
-      if (m.vendor) mealVendorMap[m._id.toString()] = m.vendor.toString();
-    }
-
     const deliveriesToInsert = [];
+    const Student = require('../models/Student');
+    const studentProfile = await Student.findOne({ user: userId }).populate('deliveryLocation');
+    const deliveryLocationId = studentProfile?.deliveryLocation?._id || null;
+    const hostelResidence = studentProfile?.deliveryLocation?.hostelResidence || 'Campus';
+
+    const monthlyTemplate = cart.templates && cart.templates.find(t => t.isMonthlyPlan || t.billingCycle === "monthly");
     
-    for (const date of Object.keys(cart.schedule)) {
-      const day = cart.schedule[date];
-      if (!day) continue;
-      const qty = Math.max(1, Number(day.qty || 1));
-      const vendorGroups = {};
-      
-      const processItem = (item) => {
-        if (!item || !item.mealId) return;
-        const vId = mealVendorMap[item.mealId.toString()];
-        if (!vId) return;
-        if (!vendorGroups[vId]) vendorGroups[vId] = { items: [], totalCost: 0 };
-        vendorGroups[vId].items.push({ name: item.name, quantity: qty });
-        vendorGroups[vId].totalCost += (Number(item.price) || 0) * qty;
-      };
+    // Determine planId, startDate, and endDate
+    let planId = 'essential';
+    let startDate = new Date();
+    if (monthlyTemplate) {
+      planId = monthlyTemplate.planId || 'essential';
+      if (monthlyTemplate.startDate) {
+        const parts = String(monthlyTemplate.startDate).split("-");
+        if (parts.length === 3) {
+          const yyyy = parseInt(parts[0], 10);
+          const mm = parseInt(parts[1], 10) - 1;
+          const dd = parseInt(parts[2], 10);
+          startDate = new Date(yyyy, mm, dd, 6, 0, 0, 0);
+        } else {
+          startDate = new Date(monthlyTemplate.startDate);
+          startDate.setHours(6, 0, 0, 0);
+        }
+      } else {
+        startDate.setDate(startDate.getDate() + 1);
+        startDate.setHours(6, 0, 0, 0);
+      }
+    }
+    const endDate = monthlyTemplate ? new Date(startDate.getTime() + 27 * 24 * 60 * 60 * 1000) : null;
 
-      processItem(day.main);
-      processItem(day.drink);
-      processItem(day.fruit);
+    if (monthlyTemplate) {
+      const approvedMeals = await Meal.find({ approvalStatus: 'approved' }).lean();
+      if (approvedMeals.length === 0) {
+        return res.status(400).json({ message: "No approved meals available in the system yet." });
+      }
+      const defaultMeal = approvedMeals[0];
+      const defaultVendor = defaultMeal.vendor;
 
-      for (const [vId, group] of Object.entries(vendorGroups)) {
-        deliveriesToInsert.push({
-          student: userId,
-          vendor: vId,
-          sponsor: sponsor._id, 
-          items: group.items,
-          status: 'awaiting_sponsor',
-          totalCost: group.totalCost,
-          timeSlot: day.timeSlot || 'Lunch',
-          scheduledDate: new Date(date),
-          location: 'Campus'
-        });
+      const drinkMeal = approvedMeals.find(m => m.category === 'drink') || defaultMeal;
+      const mainMeal = approvedMeals.find(m => m.category === 'main') || defaultMeal;
+
+      const slots = [];
+      if (monthlyTemplate.planId === 'essential') {
+        slots.push('Lunch', 'Supper');
+      } else {
+        slots.push('Breakfast', 'Lunch', 'Supper');
+      }
+
+      if (monthlyTemplate.customSchedule) {
+        const customSchedule = monthlyTemplate.customSchedule;
+        const uniqueMealIds = new Set();
+
+        for (let dayOffset = 0; dayOffset < 28; dayOffset++) {
+          const dayConfig = Array.isArray(customSchedule) ? customSchedule[dayOffset] : customSchedule[String(dayOffset)] || customSchedule[dayOffset];
+          if (dayConfig) {
+            if (dayConfig.breakfast) uniqueMealIds.add(dayConfig.breakfast.toString());
+            if (dayConfig.lunch) uniqueMealIds.add(dayConfig.lunch.toString());
+            if (dayConfig.supper) uniqueMealIds.add(dayConfig.supper.toString());
+          }
+        }
+
+        const fetchedMeals = await Meal.find({ _id: { $in: Array.from(uniqueMealIds) } }).lean();
+        const mealMap = {};
+        for (const m of fetchedMeals) {
+          mealMap[m._id.toString()] = m;
+        }
+
+        for (let dayOffset = 0; dayOffset < 28; dayOffset++) {
+          const scheduledDate = new Date(startDate.getTime() + dayOffset * 24 * 60 * 60 * 1000);
+          const dayConfig = Array.isArray(customSchedule) ? customSchedule[dayOffset] : customSchedule[String(dayOffset)] || customSchedule[dayOffset];
+
+          for (const slot of slots) {
+            let matchedMeal = null;
+            if (dayConfig) {
+              const customizedMealId = dayConfig[slot.toLowerCase()] || dayConfig[slot];
+              if (customizedMealId) {
+                matchedMeal = mealMap[customizedMealId.toString()];
+              }
+            }
+
+            if (!matchedMeal) {
+              matchedMeal = slot === 'Breakfast' ? drinkMeal : mainMeal;
+            }
+
+            deliveriesToInsert.push({
+              student: userId,
+              vendor: matchedMeal.vendor || defaultVendor,
+              sponsor: sponsor._id,
+              items: [{ name: matchedMeal.name, quantity: 1 }],
+              status: 'awaiting_sponsor',
+              totalCost: Number(matchedMeal.price || 150),
+              timeSlot: slot,
+              scheduledDate: scheduledDate,
+              location: hostelResidence,
+              deliveryLocation: deliveryLocationId
+            });
+          }
+        }
+      } else {
+        const WeeklyPlan = require('../models/WeeklyPlan');
+        const plans = await WeeklyPlan.find({ planId: monthlyTemplate.planId })
+          .populate('breakfast')
+          .populate('lunch')
+          .populate('supper')
+          .lean();
+
+        for (let dayOffset = 0; dayOffset < 28; dayOffset++) {
+          const scheduledDate = new Date(startDate.getTime() + dayOffset * 24 * 60 * 60 * 1000);
+          const weekdays = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+          const dayName = weekdays[scheduledDate.getDay()];
+          const week = Math.floor(dayOffset / 7) + 1;
+
+          const matchedPlan = plans.find(p => p.week === week && p.day === dayName);
+
+          for (const slot of slots) {
+            let matchedMeal = null;
+            if (matchedPlan) {
+              if (slot === 'Breakfast') matchedMeal = matchedPlan.breakfast;
+              else if (slot === 'Lunch') matchedMeal = matchedPlan.lunch;
+              else if (slot === 'Supper') matchedMeal = matchedPlan.supper;
+            }
+
+            if (!matchedMeal) {
+              matchedMeal = slot === 'Breakfast' ? drinkMeal : mainMeal;
+            }
+
+            const items = [{ name: matchedMeal.name, quantity: 1 }];
+            if (monthlyTemplate.planId === 'ultimate' && slot === 'Supper') {
+              items.push({ name: 'Daily Seasonal Fruit', quantity: 1 });
+            }
+
+            deliveriesToInsert.push({
+              student: userId,
+              vendor: matchedMeal.vendor || defaultVendor,
+              sponsor: sponsor._id,
+              items: items,
+              status: 'awaiting_sponsor',
+              totalCost: Number(matchedMeal.price || 150),
+              timeSlot: slot,
+              scheduledDate: scheduledDate,
+              location: hostelResidence,
+              deliveryLocation: deliveryLocationId
+            });
+          }
+        }
+      }
+    } else if (cart.schedule && Object.keys(cart.schedule).length > 0) {
+      const mealIdsToFetch = new Set();
+      for (const date of Object.keys(cart.schedule)) {
+        const day = cart.schedule[date];
+        if (!day) continue;
+        if (day.main && day.main.mealId) mealIdsToFetch.add(day.main.mealId.toString());
+        if (day.drink && day.drink.mealId) mealIdsToFetch.add(day.drink.mealId.toString());
+        if (day.fruit && day.fruit.mealId) mealIdsToFetch.add(day.fruit.mealId.toString());
+      }
+
+      const fetchedMeals = await Meal.find({ _id: { $in: Array.from(mealIdsToFetch) } }).lean();
+      const mealVendorMap = {};
+      for (const m of fetchedMeals) {
+        if (m.vendor) mealVendorMap[m._id.toString()] = m.vendor.toString();
+      }
+
+      for (const date of Object.keys(cart.schedule)) {
+        const day = cart.schedule[date];
+        if (!day) continue;
+        const qty = Math.max(1, Number(day.qty || 1));
+        const vendorGroups = {};
+        
+        const processItem = (item) => {
+          if (!item || !item.mealId) return;
+          const vId = mealVendorMap[item.mealId.toString()];
+          if (!vId) return;
+          if (!vendorGroups[vId]) vendorGroups[vId] = { items: [], totalCost: 0 };
+          vendorGroups[vId].items.push({ name: item.name, quantity: qty });
+          vendorGroups[vId].totalCost += (Number(item.price) || 0) * qty;
+        };
+
+        processItem(day.main);
+        processItem(day.drink);
+        processItem(day.fruit);
+
+        for (const [vId, group] of Object.entries(vendorGroups)) {
+          deliveriesToInsert.push({
+            student: userId,
+            vendor: vId,
+            sponsor: sponsor._id, 
+            items: group.items,
+            status: 'awaiting_sponsor',
+            totalCost: group.totalCost,
+            timeSlot: day.timeSlot || 'Lunch',
+            scheduledDate: new Date(date),
+            location: hostelResidence,
+            deliveryLocation: deliveryLocationId
+          });
+        }
       }
     }
     
@@ -589,6 +735,15 @@ async function addSponsorCheckout(req, res) {
     if (deliveriesToInsert.length > 0) {
       const inserted = await Delivery.create(deliveriesToInsert);
       createdDeliveryIds = inserted.map(d => d._id);
+    }
+
+    if (cart.schedule && Object.keys(cart.schedule).length > 0 && !monthlyTemplate) {
+      const dates = Object.keys(cart.schedule).map(d => new Date(d)).sort((a, b) => a - b);
+      if (dates.length > 0) {
+        startDate = dates[0];
+        endDate = dates[dates.length - 1];
+        planId = 'custom';
+      }
     }
 
     // Save the SponsorRequest
@@ -599,7 +754,10 @@ async function addSponsorCheckout(req, res) {
       student: userId,
       deliveryIds: createdDeliveryIds,
       amountKES: subtotalKes,
-      status: 'pending'
+      status: 'pending',
+      planId,
+      startDate,
+      endDate
     });
 
     await Cart.findOneAndUpdate({ user: userId }, { schedule: {} });
@@ -881,7 +1039,6 @@ async function dailyTemplateCheckout(req, res) {
     res.json({
       success: true,
       message: "Daily Template Plan checked out and deliveries scheduled successfully!",
-      txHash: lockResult.transaction.stellarTxHash,
       newBalance: lockResult.studentWallet.availableBalanceKES
     });
   } catch (error) {
