@@ -37,6 +37,14 @@ async function updateMyPhone(req, res) {
       });
     }
 
+    // ✅ Check if phone already registered to another user
+    const existing = await User.findOne({ phone, _id: { $ne: req.user.id } }).select("_id").lean();
+    if (existing) {
+      return res.status(409).json({
+        message: "This phone number is already registered to another account. Please use a different number.",
+      });
+    }
+
     const updated = await User.findByIdAndUpdate(
       req.user.id,
       { $set: { phone } },
@@ -90,7 +98,19 @@ async function updateProfile(req, res) {
 
     const userUpdates = {};
     if (updateData.name !== undefined) userUpdates.name = updateData.name;
-    if (updateData.phone !== undefined) userUpdates.phone = normalizeKePhone(updateData.phone);
+    if (updateData.phone !== undefined) {
+      const normalizedPhone = normalizeKePhone(updateData.phone);
+      // ✅ Check phone uniqueness — reject if another user already has this number
+      if (normalizedPhone) {
+        const existingPhone = await User.findOne({ phone: normalizedPhone, _id: { $ne: userId } }).select("_id").lean();
+        if (existingPhone) {
+          return res.status(409).json({
+            message: "This phone number is already registered to another account. Please use a different number.",
+          });
+        }
+      }
+      userUpdates.phone = normalizedPhone;
+    }
     if (updateData.avatar !== undefined) userUpdates.avatar = updateData.avatar;
 
     if (Object.keys(userUpdates).length > 0) {

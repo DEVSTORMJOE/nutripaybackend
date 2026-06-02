@@ -101,13 +101,33 @@ async function checkoutCart(req, res) {
 
       // Create an active Subscription record
       const Subscription = require('../models/Subscription');
-      const today = new Date();
-      const endDate = new Date(today.getTime() + 28 * 24 * 60 * 60 * 1000);
+      
+      let startDate = new Date();
+      if (monthlyTemplate.startDate) {
+        const parts = String(monthlyTemplate.startDate).split("-");
+        if (parts.length === 3) {
+          const yyyy = parseInt(parts[0], 10);
+          const mm = parseInt(parts[1], 10) - 1;
+          const dd = parseInt(parts[2], 10);
+          startDate = new Date(yyyy, mm, dd, 6, 0, 0, 0);
+        } else {
+          startDate = new Date(monthlyTemplate.startDate);
+          startDate.setHours(6, 0, 0, 0);
+        }
+      } else {
+        // Fallback: tomorrow
+        startDate.setDate(startDate.getDate() + 1);
+        startDate.setHours(6, 0, 0, 0);
+      }
+
+      // endDate is 28 days from startDate (inclusive, 27 full days added)
+      const endDate = new Date(startDate.getTime() + 27 * 24 * 60 * 60 * 1000);
+
       const subscription = await Subscription.create({
         student: userId,
         planId: monthlyTemplate.planId || 'essential',
         status: 'active',
-        startDate: today,
+        startDate: startDate,
         endDate: endDate,
         totalPaidKES: subtotalKes
       });
@@ -155,7 +175,7 @@ async function checkoutCart(req, res) {
         }
 
         for (let dayOffset = 0; dayOffset < 28; dayOffset++) {
-          const scheduledDate = new Date(today.getTime() + dayOffset * 24 * 60 * 60 * 1000);
+          const scheduledDate = new Date(startDate.getTime() + dayOffset * 24 * 60 * 60 * 1000);
           const dayConfig = Array.isArray(customSchedule) ? customSchedule[dayOffset] : customSchedule[String(dayOffset)] || customSchedule[dayOffset];
 
           for (const slot of slots) {
@@ -193,7 +213,7 @@ async function checkoutCart(req, res) {
           .lean();
 
         for (let dayOffset = 0; dayOffset < 28; dayOffset++) {
-          const scheduledDate = new Date(today.getTime() + dayOffset * 24 * 60 * 60 * 1000);
+          const scheduledDate = new Date(startDate.getTime() + dayOffset * 24 * 60 * 60 * 1000);
           const weekdays = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
           const dayName = weekdays[scheduledDate.getDay()];
           const week = Math.floor(dayOffset / 7) + 1;
@@ -308,6 +328,11 @@ async function checkoutCart(req, res) {
       }
     }
 
+    const Student = require('../models/Student');
+    const studentProfile = await Student.findOne({ user: userId }).populate('deliveryLocation');
+    const deliveryLocationId = studentProfile?.deliveryLocation?._id || null;
+    const hostelResidence = studentProfile?.deliveryLocation?.hostelResidence || 'Campus';
+
     const deliveriesToInsert = [];
     
     for (const date of Object.keys(cart.schedule)) {
@@ -343,7 +368,8 @@ async function checkoutCart(req, res) {
           totalCost: group.totalCost,
           timeSlot: day.timeSlot || 'Lunch',
           scheduledDate: new Date(date),
-          location: 'Campus' // Default location for now
+          location: hostelResidence,
+          deliveryLocation: deliveryLocationId
         });
       }
     }
@@ -398,8 +424,11 @@ async function addSponsorCheckout(req, res) {
     }
 
     const cart = await Cart.findOne({ user: userId }).lean();
-    if (!cart || !cart.schedule || Object.keys(cart.schedule).length === 0) {
-      return res.status(400).json({ message: "Cart is empty." });
+    // ✅ Cart may use either schedule (custom/daily) or templates (monthly plan)
+    const hasSchedule = cart?.schedule && Object.keys(cart.schedule).length > 0;
+    const hasTemplates = cart?.templates && cart.templates.length > 0;
+    if (!cart || (!hasSchedule && !hasTemplates)) {
+      return res.status(400).json({ message: "Cart is empty. Please add a plan to your cart before requesting a sponsor." });
     }
 
     let sponsor = await User.findOne({ email: sponsorEmail });
@@ -434,16 +463,28 @@ async function addSponsorCheckout(req, res) {
       $addToSet: { linkedAccounts: sponsor._id }
     });
 
-    // Subtotal calculation for email
+    // Subtotal calculation for email — handles both monthly templates and custom schedule
     let subtotalKes = 0;
-    for (const date of Object.keys(cart.schedule)) {
-      const day = cart.schedule[date];
-      if (!day) continue;
-      const qty = Math.max(1, Number(day.qty || 1));
-      const main = Number(day?.main?.price || 0);
-      const drink = Number(day?.drink?.price || 0);
-      const fruit = Number(day?.fruit?.price || 0);
-      subtotalKes += (main + drink + fruit) * qty;
+
+    // Monthly/preset plan via templates
+    if (cart.templates && cart.templates.length > 0) {
+      for (const tmpl of cart.templates) {
+        const price = Number(tmpl.main?.price || tmpl.price || tmpl.totalCost || 0);
+        subtotalKes += price;
+      }
+    }
+
+    // Custom day-by-day schedule
+    if (cart.schedule && Object.keys(cart.schedule).length > 0) {
+      for (const date of Object.keys(cart.schedule)) {
+        const day = cart.schedule[date];
+        if (!day) continue;
+        const qty = Math.max(1, Number(day.qty || 1));
+        const main = Number(day?.main?.price || 0);
+        const drink = Number(day?.drink?.price || 0);
+        const fruit = Number(day?.fruit?.price || 0);
+        subtotalKes += (main + drink + fruit) * qty;
+      }
     }
 
     // Generate secure sponsorship token
@@ -677,13 +718,8 @@ async function customPlanCheckout(req, res) {
           }
 
           if (!matchingMeal) {
-            if (slot === 'Breakfast') matchingMeal = breakfastMeal;
-            else if (slot === 'Lunch') matchingMeal = lunchMeal;
-            else if (slot === 'Supper') matchingMeal = supperMeal;
-          }
-
-          if (!matchingMeal) {
-            matchingMeal = approvedMeals.find(m => m.category === (slot === 'Breakfast' ? 'drink' : 'main')) || defaultMeal;
+            // In customSchedule, if no meal was selected for this slot, do not schedule a delivery.
+            continue;
           }
 
           deliveriesToInsert.push({
@@ -740,10 +776,118 @@ async function customPlanCheckout(req, res) {
       message: "Custom Monthly Plan built and checkout completed successfully!",
       subscription
     });
-  } catch (error) {
-    console.error("Custom plan checkout failed:", error);
-    res.status(500).json({ message: "Custom plan checkout failed: " + error.message });
+  } catch (err) {
+    console.error("Custom plan checkout failed:", err);
+    res.status(500).json({ message: "Custom plan checkout failed: " + err.message });
   }
 }
 
-module.exports = { getCart, replaceCart, clearCart, checkoutCart, addSponsorCheckout, customPlanCheckout };
+async function dailyTemplateCheckout(req, res) {
+  const { startDate, endDate, items, timeSlot, totalCost } = req.body;
+  try {
+    const userId = req.user.id;
+
+    if (!startDate || !endDate) {
+      return res.status(400).json({ message: "Start date and end date are required." });
+    }
+    if (!items || !Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({ message: "Selected template items are required." });
+    }
+    if (!totalCost || totalCost <= 0) {
+      return res.status(400).json({ message: "Total cost must be greater than 0" });
+    }
+
+    // 1. Lock subscription funds using the Escrow Service
+    const lockResult = await escrowService.lockSubscriptionFunds(userId, totalCost, null);
+
+    // 2. Resolve Student delivery profile
+    const Student = require('../models/Student');
+    const studentProfile = await Student.findOne({ user: userId }).populate('deliveryLocation');
+    const deliveryLocationId = studentProfile?.deliveryLocation?._id || null;
+    const hostelResidence = studentProfile?.deliveryLocation?.hostelResidence || 'Campus';
+
+    const Meal = require('../models/Meal');
+    const Delivery = require('../models/Delivery');
+
+    // Group template items by vendor
+    const vendorGroups = {};
+    for (const item of items) {
+      const mealDoc = await Meal.findById(item.mealId || item._id).lean();
+      if (!mealDoc || !mealDoc.vendor) continue;
+      const vId = mealDoc.vendor.toString();
+      if (!vendorGroups[vId]) {
+        vendorGroups[vId] = { items: [], dailyCost: 0 };
+      }
+      vendorGroups[vId].items.push({
+        name: item.name,
+        quantity: item.qty || item.quantity || 1
+      });
+      vendorGroups[vId].dailyCost += Number(item.price) * (item.qty || item.quantity || 1);
+    }
+
+    const start = new Date(startDate);
+    const end = new Date(endDate);
+    const diffTime = Math.abs(end - start);
+    const daysCount = Math.ceil(diffTime / (1000 * 60 * 60 * 24)) + 1;
+
+    const deliveriesToInsert = [];
+    
+    // Iterate day by day from start to end (inclusive)
+    for (let dayOffset = 0; dayOffset < daysCount; dayOffset++) {
+      const scheduledDate = new Date(start.getTime() + dayOffset * 24 * 60 * 60 * 1000);
+      
+      for (const [vId, group] of Object.entries(vendorGroups)) {
+        deliveriesToInsert.push({
+          student: userId,
+          vendor: vId,
+          items: group.items,
+          status: 'pending',
+          totalCost: group.dailyCost,
+          timeSlot: timeSlot || 'Lunch',
+          scheduledDate: scheduledDate,
+          location: hostelResidence,
+          deliveryLocation: deliveryLocationId
+        });
+      }
+    }
+
+    if (deliveriesToInsert.length > 0) {
+      await Delivery.create(deliveriesToInsert);
+
+      const Notification = require("../models/Notification");
+      const vendorTotals = {};
+      deliveriesToInsert.forEach(d => {
+        if (!vendorTotals[d.vendor]) vendorTotals[d.vendor] = 0;
+        vendorTotals[d.vendor] += d.totalCost;
+      });
+
+      const Vendor = require("../models/Vendor");
+      const targetVendors = await Vendor.find({ _id: { $in: Object.keys(vendorTotals) } });
+      
+      for (const vDoc of targetVendors) {
+        await Notification.create({
+          user: vDoc.user,
+          type: 'order',
+          title: 'New Daily Template Order',
+          message: `A student scheduled ${daysCount} days of daily template deliveries totaling ${vendorTotals[vDoc._id.toString()]} KES.`
+        });
+      }
+    }
+
+    // 4. Clear Cart
+    const CartModel = require('../models/Cart');
+    await CartModel.findOneAndUpdate({ user: userId }, { schedule: {} });
+
+    res.json({
+      success: true,
+      message: "Daily Template Plan checked out and deliveries scheduled successfully!",
+      txHash: lockResult.transaction.stellarTxHash,
+      newBalance: lockResult.studentWallet.availableBalanceKES
+    });
+  } catch (error) {
+    console.error("Daily template checkout failed:", error);
+    res.status(500).json({ message: "Daily template checkout failed: " + error.message });
+  }
+}
+
+module.exports = { getCart, replaceCart, clearCart, checkoutCart, addSponsorCheckout, customPlanCheckout, dailyTemplateCheckout };

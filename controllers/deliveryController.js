@@ -158,6 +158,8 @@ function fmtMoneyKes(amount) {
 const getAssignedDeliveries = async (req, res) => {
   try {
     const DeliveryPersonnel = require("../models/DeliveryPersonnel");
+    const Student = require("../models/Student");
+
     const driver = await DeliveryPersonnel.findOne({ user: req.user.id });
     const assignedLocationIds = driver ? driver.assignedLocations || [] : [];
 
@@ -168,14 +170,48 @@ const getAssignedDeliveries = async (req, res) => {
       ],
       status: { $nin: ["delivered", "cancelled", "failed"] }
     })
-      // ✅ include phone so SMS routing can work (non-breaking)
       .populate("student", "name email phone")
+      .populate("deliveryLocation")
       .populate({
         path: "vendor",
         populate: { path: "user", select: "name email phone" },
-      });
+      })
+      .lean();
 
-    res.json(deliveries);
+    // ✅ Enrich each delivery with the Student profile (hostel, block, floor, room, landmark, instructions)
+    const studentUserIds = deliveries
+      .map((d) => d.student?._id || d.student)
+      .filter(Boolean);
+
+    const studentProfiles = await Student.find({ user: { $in: studentUserIds } })
+      .select("user hostel block floor room landmark instructions diet allergies")
+      .lean();
+
+    const profileByUserId = {};
+    for (const sp of studentProfiles) {
+      profileByUserId[String(sp.user)] = sp;
+    }
+
+    const enriched = deliveries.map((d) => {
+      const userId = String(d.student?._id || d.student || "");
+      const sp = profileByUserId[userId] || {};
+      return {
+        ...d,
+        student: {
+          ...(d.student || {}),
+          hostel: sp.hostel || "",
+          block: sp.block || "",
+          floor: sp.floor || "",
+          room: sp.room || "",
+          landmark: sp.landmark || "",
+          instructions: sp.instructions || "",
+          diet: sp.diet || "",
+          allergies: sp.allergies || "",
+        },
+      };
+    });
+
+    res.json(enriched);
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: "Server Error" });
@@ -383,6 +419,7 @@ const getDeliveryHistory = async (req, res) => {
 
 module.exports = {
   getAssignedDeliveries,
+  confirmPickup,
   markDelivered,
   getDeliveryHistory,
 };

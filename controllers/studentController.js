@@ -200,7 +200,9 @@ const optOut = async (req, res) => {
 // @access  Private (Student)
 const getDeliverySchedule = async (req, res) => {
   try {
-    const deliveries = await Delivery.find({ student: req.user.id, isCustom: { $ne: true } }).sort({ scheduledDate: 1 });
+    const deliveries = await Delivery.find({ student: req.user.id, isCustom: { $ne: true } })
+      .populate('deliveryAgent', 'name email')
+      .sort({ scheduledDate: 1 });
     res.json(deliveries);
   } catch (error) {
     console.error(error);

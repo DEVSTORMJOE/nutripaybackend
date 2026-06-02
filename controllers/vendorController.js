@@ -129,6 +129,7 @@ const getQuickOrders = async (req, res) => {
     const deliveries = await Delivery.find({ vendor: vendorRecord._id, isCustom: true })
       .populate('student', 'name email phone')
       .populate('deliveryAgent', 'name email')
+      .populate('deliveryLocation', 'hostelResidence campus university')
       .sort({ createdAt: -1 });
 
     res.json(deliveries);
@@ -215,6 +216,20 @@ const updateOrderStatus = async (req, res) => {
         const DeliveryLocation = require('../models/DeliveryLocation');
 
         let locId = delivery.deliveryLocation;
+
+        // Self-Healing Fallback: if no deliveryLocation ObjectId, try to lookup from Student profile
+        if (!locId && delivery.student) {
+          const Student = require('../models/Student');
+          const studentProfile = await Student.findOne({ user: delivery.student });
+          if (studentProfile && studentProfile.deliveryLocation) {
+            locId = studentProfile.deliveryLocation;
+            delivery.deliveryLocation = studentProfile.deliveryLocation;
+            if (studentProfile.hostelResidence) {
+              delivery.location = studentProfile.hostelResidence;
+            }
+            console.log(`[AutoAssign] Healed order using Student profile. Set location to "${delivery.location}" and ID: ${locId}`);
+          }
+        }
 
         // Fallback: if no deliveryLocation ObjectId but location string exists, resolve it
         if (!locId && delivery.location) {
