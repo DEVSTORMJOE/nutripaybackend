@@ -193,11 +193,12 @@ const createCustomOrder = async (req, res) => {
 
       // Notify Vendor
       const Notification = require('../models/Notification');
+      const mealPrice = items.reduce((sum, item) => sum + ((item.price || 0) * (item.quantity || 1)), 0);
       await Notification.create({
         user: vendorProfile.user,
         type: 'order',
         title: 'New Instant Custom Order',
-        message: `You have a new custom order (${orderId}) of KES ${totalCost}.`
+        message: `You have a new custom order (${orderId}) of KES ${mealPrice}.`
       });
 
       return res.json({

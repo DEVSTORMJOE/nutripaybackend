@@ -8,7 +8,25 @@ const getNotifications = async (req, res) => {
     const notifications = await Notification.find({ user: req.user.id })
                                             .sort({ createdAt: -1 })
                                             .limit(50);
-    res.json(notifications);
+    // Normalize isRead -> read for frontend compatibility
+    const normalized = notifications.map(n => ({
+      ...n.toObject(),
+      read: n.isRead
+    }));
+    res.json(normalized);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Server Error' });
+  }
+};
+
+// @desc    Get unread notification count
+// @route   GET /api/notifications/unread-count
+// @access  Private
+const getUnreadCount = async (req, res) => {
+  try {
+    const count = await Notification.countDocuments({ user: req.user.id, isRead: false });
+    res.json({ count });
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: 'Server Error' });
@@ -16,7 +34,7 @@ const getNotifications = async (req, res) => {
 };
 
 // @desc    Mark as read
-// @route   PUT /api/notifications/:id/read
+// @route   PATCH /api/notifications/:id/read
 // @access  Private
 const markAsRead = async (req, res) => {
   try {
@@ -48,8 +66,23 @@ const markAllAsRead = async (req, res) => {
   }
 };
 
+// @desc    Delete a notification
+// @route   DELETE /api/notifications/:id
+// @access  Private
+const deleteNotification = async (req, res) => {
+  try {
+    await Notification.findOneAndDelete({ _id: req.params.id, user: req.user.id });
+    res.json({ message: 'Notification deleted' });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Server Error' });
+  }
+};
+
 module.exports = {
   getNotifications,
+  getUnreadCount,
   markAsRead,
-  markAllAsRead
+  markAllAsRead,
+  deleteNotification
 };

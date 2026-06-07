@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { getDashboard, approveMeal, getUsers, getPendingApprovals, approveVendor, getVendors, getWallets, getTransactions, createUser, updateUser, createVendor, getMeals, updateMealApproval, getOrders, getDeliveryStaff, approveDelivery, getWeeklyPlans, updateWeeklyPlan, getWithdrawalRequests, handleWithdrawalRequest, assignLocationsToDriver, getRefundRequests, handleRefundApproval } = require('../controllers/adminController');
+const { getDashboard, approveMeal, getUsers, getPendingApprovals, approveVendor, getVendors, getWallets, getTransactions, createUser, updateUser, createVendor, getMeals, updateMealApproval, getOrders, getDeliveryStaff, approveDelivery, getWeeklyPlans, updateWeeklyPlan, getWithdrawalRequests, handleWithdrawalRequest, assignLocationsToDriver, getRefundRequests, handleRefundApproval, getErrorLogs, resolveErrorLog } = require('../controllers/adminController');
 const { protect } = require('../middleware/authMiddleware');
 const { role } = require('../middleware/roleMiddleware');
 
@@ -31,6 +31,10 @@ router.post('/withdrawals/:id/approve', protect, role('admin'), handleWithdrawal
 // Refund Request Routing (Student Opt-Out Approvals)
 router.get('/refund-requests', protect, role('admin'), getRefundRequests);
 router.post('/refund-requests/:id/handle', protect, role('admin'), handleRefundApproval);
+
+// System Error Audit Logs Routing
+router.get('/error-logs', protect, role('admin'), getErrorLogs);
+router.post('/error-logs/:id/resolve', protect, role('admin'), resolveErrorLog);
 
 // Platform Settings & Commission Config & Shuffle Analytics Routing
 const { getSettings, updateSettings, getShuffleDemandStats, updateVendorCommission } = require('../controllers/adminController');

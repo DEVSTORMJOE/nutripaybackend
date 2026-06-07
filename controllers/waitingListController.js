@@ -31,27 +31,22 @@ exports.joinWaitingList = async (req, res) => {
 
     // Send styled welcome email (Clean white theme)
     const mailHtml = `
-      <div style="font-family: 'Inter', Helvetica, sans-serif; max-width: 600px; margin: 0 auto; background-color: #fafafa; color: #1e293b; border: 1px solid #e2e8f0; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 15px rgba(0,0,0,0.05);">
-        <div style="background-color: #ffffff; padding: 30px 20px; text-align: center; border-bottom: 3px solid #f81d1d;">
-          <img src="https://ik.imagekit.io/rhjfaafsm/NutriPay.svg" alt="NutriPay" style="height: 50px; width: auto; margin-bottom: 5px; display: inline-block;" />
-          <p style="color: #64748b; font-size: 13px; margin: 0; text-transform: uppercase; letter-spacing: 1.5px; font-weight: 600;">The Future of Dining</p>
+      <div style="font-family: 'Inter', system-ui, -apple-system, sans-serif; max-width: 600px; margin: 0 auto; background-color: #ffffff; border: 1px solid #e2e8f0; border-radius: 8px; overflow: hidden; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);">
+        <div style="background: linear-gradient(135deg, #f81d1d 0%, #ec6408 100%); padding: 30px 20px; text-align: center;">
+          <h1 style="color: #ffffff; font-size: 28px; font-weight: 900; margin: 0; text-transform: uppercase; letter-spacing: 2px;">Nutri<span style="color: #ffd045;">Pay</span></h1>
+          <p style="color: rgba(255,255,255,0.85); font-size: 12px; margin: 5px 0 0 0; font-weight: bold; text-transform: uppercase; letter-spacing: 1.5px;">Smart Dining, Block-Secured</p>
         </div>
         
-        <div style="padding: 40px 30px; background-color: #ffffff;">
-          <h2 style="font-size: 24px; font-weight: 800; margin-top: 0; color: #0f172a; text-align: center;">You're on the list! 🎉</h2>
-          <p style="font-size: 16px; line-height: 1.6; color: #475569;">
-            Hi there,
-          </p>
-          <p style="font-size: 16px; line-height: 1.6; color: #475569;">
-            Thank you for joining the official <strong>NutriPay</strong> waiting list. We are thrilled to have you early on our journey. 
-            You've helped us get one step closer to tailoring the upcoming experience just for you.
+        <div style="padding: 40px 30px; line-height: 1.6; color: #334155;">
+          <h2 style="font-size: 22px; font-weight: 800; margin-top: 0; color: #0f172a; text-align: center;">You're on the list! 🎉</h2>
+          <p style="font-size: 15px; color: #475569;">Hi there,</p>
+          <p style="font-size: 15px; color: #475569;">
+            Thank you for joining the official <strong>NutriPay</strong> waiting list. We are thrilled to have you early on our journey as we build the future of campus dining.
           </p>
           
           <div style="background-color: #fef2f2; border-left: 4px solid #f81d1d; padding: 20px; margin: 30px 0; border-radius: 4px;">
-            <p style="margin: 0; font-size: 16px; color: #7f1d1d; font-weight: 700;">
-              What happens next?
-            </p>
-            <p style="margin: 10px 0 0; font-size: 15px; color: #991b1b; line-height: 1.5;">
+            <p style="margin: 0; font-size: 15px; color: #7f1d1d; font-weight: 700;">What happens next?</p>
+            <p style="margin: 8px 0 0; font-size: 14px; color: #991b1b; line-height: 1.5;">
               We are working hard to prepare our roll-out. You will be among the very first to get exclusive access and early-bird benefits when we launch. Keep an eye on your inbox!
             </p>
           </div>
@@ -62,10 +57,10 @@ exports.joinWaitingList = async (req, res) => {
           </p>
         </div>
         
-        <div style="background-color: #f8fafc; padding: 25px 20px; text-align: center; border-top: 1px solid #e2e8f0;">
-          <p style="margin: 0; font-size: 12px; color: #94a3b8; font-weight: 500;">
-            &copy; ${new Date().getFullYear()} NutriPay. All rights reserved.
-          </p>
+        <div style="background-color: #f8fafc; padding: 25px 20px; text-align: center; border-top: 1px solid #e2e8f0; font-size: 11px; color: #64748b;">
+          <p style="margin: 0; font-weight: bold;">NutriPay - Decentralized Student Dining Wallet Platform</p>
+          <p style="margin: 5px 0 0 0;">This email was sent securely via Stellar Custodial Treasury Notification Service.</p>
+          <p style="margin: 15px 0 0 0; color: #94a3b8;">&copy; ${new Date().getFullYear()} NutriPay. All rights reserved.</p>
         </div>
       </div>
     `;

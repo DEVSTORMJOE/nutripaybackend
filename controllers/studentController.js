@@ -118,10 +118,14 @@ const optOut = async (req, res) => {
     // Find active subscription
     const subscription = await Subscription.findOne({ student: studentId, status: 'active' });
     
-    // Find unfulfilled deliveries
+    // Find unfulfilled deliveries before the preparation stage (only pending and assigned)
+    // Meals already preparing, ready, or picked up cannot be cancelled or refunded on opt-out.
+    // Donated meals cannot be cancelled by the donator so they are excluded.
     const pendingDeliveries = await Delivery.find({
       student: studentId,
-      status: { $in: ['pending', 'assigned', 'preparing', 'ready'] }
+      status: { $in: ['pending', 'assigned'] },
+      isCustom: { $ne: true },
+      isDonated: { $ne: true }
     });
 
     if (!subscription && pendingDeliveries.length === 0) {
@@ -132,26 +136,32 @@ const optOut = async (req, res) => {
     studentWallet.status = 'refund_pending';
     await studentWallet.save();
 
-    // Sum unfulfilled delivery costs
+    // Sum unfulfilled delivery costs — but cap to actual locked balance to prevent over-refunding
+    const actualLocked = studentWallet.lockedBalanceKES || 0;
     let totalRefundKes = 0;
     const pendingDeliveryIds = [];
     let sponsorId = subscription?.sponsor || null;
+    let hasSponsorDeliveries = false;
 
     pendingDeliveries.forEach(d => {
       totalRefundKes += Number(d.totalCost || 0);
       pendingDeliveryIds.push(d._id);
-      if (d.sponsor && !sponsorId) {
+      if (d.sponsor) {
         sponsorId = d.sponsor;
+        hasSponsorDeliveries = true;
       }
     });
 
-    // Fallback sponsor lookups if not found on subscription
-    if (!sponsorId) {
-      const studentObj = await User.findById(studentId).populate('linkedAccounts');
-      if (studentObj && studentObj.linkedAccounts && studentObj.linkedAccounts.length > 0) {
-        const potentialSponsor = studentObj.linkedAccounts.find(account => account.role === 'sponsor');
-        if (potentialSponsor) sponsorId = potentialSponsor._id;
-      }
+    // Safety cap: never request a refund larger than what's currently in escrow
+    if (totalRefundKes > actualLocked) {
+      console.warn(`[OptOut] Computed refund KES ${totalRefundKes} exceeds locked balance KES ${actualLocked}. Capping to locked.`);
+      totalRefundKes = actualLocked;
+    }
+
+    // Strictly check if the subscription or deliveries were sponsored. No fallback lookup.
+    const isSponsored = !!subscription?.sponsor || hasSponsorDeliveries;
+    if (!isSponsored) {
+      sponsorId = null;
     }
 
     // Cancel deliveries immediately to halt service
@@ -236,12 +246,30 @@ const cancelDeliveries = async (req, res) => {
     }
 
     // Process cancellations
-    const deliveries = await Delivery.find({ _id: { $in: deliveryIds }, student: studentId, status: 'pending' });
+    const deliveries = await Delivery.find({ _id: { $in: deliveryIds }, student: studentId, status: 'pending', isDonated: { $ne: true } });
     if (deliveries.length === 0) {
-      return res.status(404).json({ message: "No pending scheduled meals found for these IDs." });
+      return res.status(404).json({ message: "No pending scheduled non-donated meals found for these IDs." });
     }
 
     for (let d of deliveries) {
+      // Cutoff Check: At least 2 hours before delivery time
+      // Breakfast = 5:00 AM cutoff, Lunch = 10:00 AM cutoff, Supper = 4:00 PM cutoff
+      const deliveryDate = new Date(d.scheduledDate);
+      const cutoffDate = new Date(deliveryDate);
+      if (d.timeSlot === 'Breakfast') {
+        cutoffDate.setHours(5, 0, 0, 0);
+      } else if (d.timeSlot === 'Lunch') {
+        cutoffDate.setHours(10, 0, 0, 0);
+      } else if (d.timeSlot === 'Supper') {
+        cutoffDate.setHours(16, 0, 0, 0);
+      } else {
+        cutoffDate.setTime(deliveryDate.getTime() - 2 * 60 * 60 * 1000);
+      }
+      
+      if (Date.now() > cutoffDate.getTime()) {
+        return res.status(400).json({ message: `Cutoff time has passed for the ${d.timeSlot} meal on ${deliveryDate.toLocaleDateString()}. It cannot be cancelled.` });
+      }
+
       const slot = d.timeSlot;
       if (slot === 'Breakfast') {
         if (studentProfile.cancelledBreakfastCount >= 1) {
@@ -259,40 +287,16 @@ const cancelDeliveries = async (req, res) => {
         }
         studentProfile.cancelledSupperCount++;
       }
-
-      // Mark cancelled
-      d.status = 'cancelled';
-      await d.save();
-
-      // Extend subscription and schedule a new delivery 1 day after expiry
-      const subscription = await Subscription.findOne({ student: studentId, status: 'active' });
-      let currentExpiry = subscription ? subscription.endDate : new Date();
-      if (!currentExpiry) currentExpiry = new Date();
-
-      const newExpiry = new Date(currentExpiry.getTime() + 24 * 60 * 60 * 1000);
-      if (subscription) {
-        subscription.endDate = newExpiry;
-        await subscription.save();
-      }
-
-      // Schedule the replacement meal on the new expiry date
-      await Delivery.create({
-        student: studentId,
-        vendor: d.vendor,
-        sponsor: d.sponsor || null,
-        items: d.items,
-        status: 'pending',
-        totalCost: d.totalCost,
-        timeSlot: d.timeSlot,
-        scheduledDate: newExpiry,
-        location: d.location
-      });
     }
+
+    // Execute refund for cancelled deliveries
+    const deliveryIdsToCancel = deliveries.map(d => d._id);
+    const refundResult = await escrowService.calculateRefund(deliveryIdsToCancel, studentId);
 
     await studentProfile.save();
 
     res.json({ 
-      message: `Successfully cancelled and extended your subscription by ${deliveries.length} day(s). Replacement meals have been scheduled.`
+      message: `Successfully cancelled your meal(s). Refunded KES ${refundResult.refundedKES} to your sponsor's/wallet balance.`
     });
 
   } catch (error) {
@@ -499,18 +503,51 @@ const getMealChangeAlternatives = async (req, res) => {
       return res.status(404).json({ message: "Delivery not found" });
     }
     
+    const scheduledDate = new Date(delivery.scheduledDate);
+    const startOfDay = new Date(scheduledDate);
+    startOfDay.setHours(0, 0, 0, 0);
+    const endOfDay = new Date(scheduledDate);
+    endOfDay.setHours(23, 59, 59, 999);
+
+    // 1. Check strict limit: Only 1 meal change is allowed per scheduled delivery day
+    const MealChangeLog = require('../models/MealChangeLog');
+    const logs = await MealChangeLog.find({
+      student: studentId,
+      approvalResult: 'Approved'
+    }).populate('deliveryId');
+
+    const alreadyChangedOnThisDate = logs.some(log => {
+      if (!log.deliveryId) return false;
+      const dDate = new Date(log.deliveryId.scheduledDate);
+      return dDate >= startOfDay && dDate <= endOfDay;
+    });
+
+    if (alreadyChangedOnThisDate) {
+      return res.status(400).json({
+        message: "Strict limit: Only 1 meal change is allowed per scheduled delivery day. You have already changed a meal on this date.",
+        alreadyChanged: true
+      });
+    }
+
+    // 2. Count all subscription meals for this scheduled date (including cancelled/donated) to divide budget correctly
+    const totalMealsForDayCount = await Delivery.countDocuments({
+      student: studentId,
+      scheduledDate: { $gte: startOfDay, $lte: endOfDay },
+      isCustom: { $ne: true }
+    });
+
     const dailyBudget = await getStudentDailyBudget(studentId);
+    const mealBudgetLimit = Number((dailyBudget / Math.max(1, totalMealsForDayCount)).toFixed(2));
     
-    // Fetch all approved meals with price <= dailyBudget
+    // Fetch all approved meals
     const meals = await Meal.find({
-      approvalStatus: 'approved',
-      price: { $lte: dailyBudget }
+      approvalStatus: 'approved'
     }).populate({
       path: 'vendor',
       populate: { path: 'user', select: 'name email' }
     });
     
-    res.json({ dailyBudget, meals });
+    res.json({ dailyBudget, mealBudgetLimit, meals, alreadyChanged: false, currentMealCost: delivery.totalCost });
   } catch (error) {
     console.error("Get Meal Change Alternatives Error:", error);
     res.status(500).json({ message: "Failed to fetch meal alternatives" });
@@ -540,27 +577,47 @@ const changeMeal = async (req, res) => {
       return res.status(400).json({ message: "Only pending deliveries can be changed." });
     }
     
+    const scheduledDate = new Date(delivery.scheduledDate);
+    const startOfDay = new Date(scheduledDate);
+    startOfDay.setHours(0, 0, 0, 0);
+    const endOfDay = new Date(scheduledDate);
+    endOfDay.setHours(23, 59, 59, 999);
+
     // 2. Check restriction: Max 1 change per day (query MealChangeLog for today)
     const todayStart = new Date();
     todayStart.setHours(0,0,0,0);
     const todayEnd = new Date();
     todayEnd.setHours(23,59,59,999);
     
-    const existingChange = await MealChangeLog.findOne({
+    const existingChangeToday = await MealChangeLog.findOne({
       student: studentId,
       deliveryId: deliveryId,
       createdAt: { $gte: todayStart, $lte: todayEnd },
       approvalResult: 'Approved'
     });
     
-    if (existingChange) {
+    if (existingChangeToday) {
       return res.status(400).json({ message: "You can only make 1 meal change per day for a scheduled delivery." });
     }
+
+    // 3. Strict limit: Check if student already changed a meal on this scheduled delivery date
+    const logs = await MealChangeLog.find({
+      student: studentId,
+      approvalResult: 'Approved'
+    }).populate('deliveryId');
+
+    const alreadyChangedOnThisDate = logs.some(log => {
+      if (!log.deliveryId) return false;
+      const dDate = new Date(log.deliveryId.scheduledDate);
+      return dDate >= startOfDay && dDate <= endOfDay;
+    });
+
+    if (alreadyChangedOnThisDate) {
+      return res.status(400).json({ message: "Strict limit: Only 1 meal change is allowed per scheduled delivery day. You have already changed a meal on this date." });
+    }
     
-    // 3. Cutoff Check: At least 2 hours before delivery time
-    // Breakfast = 5:00 AM cutoff, Lunch = 10:00 AM cutoff, Supper = 4:00 PM cutoff
-    const deliveryDate = new Date(delivery.scheduledDate);
-    const cutoffDate = new Date(deliveryDate);
+    // 4. Cutoff Check: At least 2 hours before delivery time
+    const cutoffDate = new Date(scheduledDate);
     if (delivery.timeSlot === 'Breakfast') {
       cutoffDate.setHours(5, 0, 0, 0);
     } else if (delivery.timeSlot === 'Lunch') {
@@ -568,7 +625,7 @@ const changeMeal = async (req, res) => {
     } else if (delivery.timeSlot === 'Supper') {
       cutoffDate.setHours(16, 0, 0, 0);
     } else {
-      cutoffDate.setTime(deliveryDate.getTime() - 2 * 60 * 60 * 1000);
+      cutoffDate.setTime(scheduledDate.getTime() - 2 * 60 * 60 * 1000);
     }
     
     if (Date.now() > cutoffDate.getTime()) {
@@ -584,32 +641,29 @@ const changeMeal = async (req, res) => {
       return res.status(400).json({ message: "Cutoff time has passed. Meals cannot be changed within 2 hours of delivery window." });
     }
     
-    // 4. Find new meal
+    // 5. Find new meal
     const newMeal = await Meal.findById(newMealId);
     if (!newMeal || newMeal.approvalStatus !== 'approved') {
       return res.status(400).json({ message: "Target meal is not approved or does not exist." });
     }
     
-    // 5. Daily budget check
+    // 6. Proportional daily budget check (Bypassed: user pays difference or receives refund)
     const dailyBudget = await getStudentDailyBudget(studentId);
-    if (newMeal.price > dailyBudget) {
-      await MealChangeLog.create({
-        student: studentId,
-        deliveryId,
-        originalMeal: delivery.items?.[0]?.name || 'Unknown',
-        newMeal: newMeal.name,
-        dailyBudget,
-        approvalResult: 'Rejected',
-        reason: `Meal price ${newMeal.price} KES exceeds daily budget of ${dailyBudget} KES`
-      });
-      return res.status(400).json({ message: `Meal price exceeds daily budget of ${dailyBudget} KES` });
-    }
     
-    // 6. Perform swap
+    // 7. Perform swap
     const originalMealName = delivery.items?.[0]?.name || 'Unknown';
     delivery.items = [{ name: newMeal.name, quantity: 1 }];
     delivery.vendor = newMeal.vendor;
-    await delivery.save();
+    
+    let refundInfo = null;
+    let chargeInfo = null;
+    if (newMeal.price < delivery.totalCost) {
+      refundInfo = await escrowService.refundMealPriceDifference(delivery, newMeal.price);
+    } else if (newMeal.price > delivery.totalCost) {
+      chargeInfo = await escrowService.chargeMealPriceDifference(delivery, newMeal.price);
+    } else {
+      await delivery.save();
+    }
     
     // Log to MealChangeLog Mongoose collection
     const changeLog = await MealChangeLog.create({
@@ -628,14 +682,20 @@ const changeMeal = async (req, res) => {
     
     res.json({
       success: true,
-      message: "Meal changed successfully!",
+      message: refundInfo && refundInfo.refunded > 0
+        ? `Meal changed successfully! Refunded KES ${refundInfo.refunded} for selecting a lower-budget meal.`
+        : chargeInfo && chargeInfo.charged > 0
+        ? `Meal changed successfully! Charged KES ${chargeInfo.charged} from your available balance for selecting a higher-budget meal.`
+        : "Meal changed successfully!",
       delivery
     });
   } catch (error) {
     console.error("Meal Change Error:", error);
-    res.status(500).json({ message: "Failed to change meal: " + error.message });
+    const status = error.message.includes("wallet balance") ? 400 : 500;
+    res.status(status).json({ message: "Failed to change meal: " + error.message });
   }
 };
+
 
 // @desc    Get refund requests for the authenticated student
 // @route   GET /api/student/my-refund-requests
@@ -701,6 +761,91 @@ const getQuickOrders = async (req, res) => {
   }
 };
 
+// @desc    Request refund of student's available balance
+// @route   POST /api/student/request-refund
+// @access  Private (Student)
+const requestRefund = async (req, res) => {
+  try {
+    const studentId = req.user.id;
+    const { amountKES } = req.body;
+
+    const studentWallet = await Wallet.findOne({ user: studentId });
+    if (!studentWallet) {
+      return res.status(404).json({ message: "Student wallet not found." });
+    }
+
+    if (studentWallet.status === 'refund_pending') {
+      return res.status(400).json({ message: "You already have a pending refund request." });
+    }
+
+    const refundAmount = amountKES !== undefined ? Number(amountKES) : studentWallet.availableBalanceKES;
+
+    if (refundAmount <= 0) {
+      return res.status(400).json({ message: "Refund amount must be greater than 0 KES." });
+    }
+
+    if (refundAmount > studentWallet.availableBalanceKES) {
+      return res.status(400).json({ message: `Insufficient available balance. Maximum refund request is KES ${studentWallet.availableBalanceKES}.` });
+    }
+
+    // Freeze student wallet to pending refund status
+    studentWallet.status = 'refund_pending';
+    await studentWallet.save();
+
+    const RefundRequest = require('../models/RefundRequest');
+    const refundRequest = await RefundRequest.create({
+      student: studentId,
+      amountKES: refundAmount,
+      fundingType: 'self',
+      sponsor: null,
+      status: 'pending_admin_approval',
+      source: 'available_balance_refund'
+    });
+
+    res.json({
+      message: `Refund request of KES ${refundAmount} submitted successfully and is pending admin approval.`,
+      refundRequest
+    });
+  } catch (error) {
+    console.error("Request Refund Error:", error);
+    res.status(500).json({ message: "Failed to request refund: " + error.message });
+  }
+};
+
+// @desc    Get donation and claim history for the authenticated student
+// @route   GET /api/student/donation-history
+// @access  Private (Student)
+const getDonationHistory = async (req, res) => {
+  try {
+    const studentId = req.user.id;
+    const history = await Delivery.find({
+      $or: [
+        { originalStudent: studentId, isDonated: true },
+        { student: studentId, claimedAt: { $exists: true, $ne: null } }
+      ]
+    })
+    .populate({
+      path: 'vendor',
+      populate: { path: 'user', select: 'name' }
+    })
+    .sort({ scheduledDate: -1 })
+    .lean();
+
+    const formattedHistory = history.map(d => {
+      const isDonor = d.originalStudent && d.originalStudent.toString() === studentId;
+      return {
+        ...d,
+        logType: isDonor ? 'donation' : 'claim'
+      };
+    });
+
+    res.json(formattedHistory);
+  } catch (error) {
+    console.error("Get donation history error:", error);
+    res.status(500).json({ message: "Failed to fetch donation history: " + error.message });
+  }
+};
+
 module.exports = {
   getDashboard,
   selectMeal,
@@ -715,5 +860,7 @@ module.exports = {
   changeMeal,
   getMyRefundRequests,
   getQuickOrders,
+  requestRefund,
+  getDonationHistory,
 };
 

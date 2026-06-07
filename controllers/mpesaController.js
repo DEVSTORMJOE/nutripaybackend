@@ -69,6 +69,14 @@ const mpesaCallback = async (req, res) => {
                 console.log(`M-Pesa STK Push for sponsor request ${sponsorRequest.token} failed or cancelled.`);
                 sponsorRequest.status = 'failed';
                 await sponsorRequest.save();
+                const errorLogger = require('../utils/errorLogger');
+                await errorLogger.logError('mpesa', `Sponsor request STK Push payment failed/cancelled for ${sponsorRequest.sponsorEmail}`, {
+                    checkoutRequestID,
+                    sponsorEmail: sponsorRequest.sponsorEmail,
+                    sponsorName: sponsorRequest.sponsorName,
+                    amountKES: sponsorRequest.subtotalKes || sponsorRequest.amountKES,
+                    reason: callbackVerification.message || 'Cancelled by user (Code 1032)'
+                }, 'warn');
                 return res.json({ ResponseCode: "0", ResponseDesc: "Success" });
             }
 
@@ -136,6 +144,7 @@ const mpesaCallback = async (req, res) => {
             await Subscription.create({
                 student: sponsorRequest.student,
                 planId: sponsorRequest.planId || 'essential',
+                sponsor: sponsor._id,
                 status: 'active',
                 startDate: sponsorRequest.startDate || new Date(),
                 endDate: sponsorRequest.endDate || new Date(Date.now() + 27 * 24 * 60 * 60 * 1000),
@@ -229,12 +238,13 @@ const mpesaCallback = async (req, res) => {
             const Vendor = require('../models/Vendor');
             const vendorProfile = await Vendor.findById(customOrder.vendor);
             if (vendorProfile) {
+                const mealPrice = customOrder.items.reduce((sum, item) => sum + ((item.price || 0) * (item.quantity || 1)), 0);
                 const Notification = require('../models/Notification');
                 await Notification.create({
                     user: vendorProfile.user,
                     type: 'order',
                     title: 'New Custom Order Paid (M-Pesa)',
-                    message: `Custom order ${customOrder.orderId} of KES ${amountPaid} has been paid via M-Pesa.`
+                    message: `Custom order ${customOrder.orderId} of KES ${mealPrice} has been paid via M-Pesa.`
                 });
             }
 
@@ -249,6 +259,14 @@ const mpesaCallback = async (req, res) => {
                 depositRecord.status = callbackVerification.resultCode === 1032 ? 'cancelled' : 'failed';
                 await depositRecord.save();
             }
+            const errorLogger = require('../utils/errorLogger');
+            await errorLogger.logError('mpesa', `M-Pesa deposit STK Push failed/cancelled for user ${userId || 'unknown'}`, {
+                checkoutRequestID,
+                userId,
+                amountKES: depositRecord ? depositRecord.amountKES : 'unknown',
+                resultCode: callbackVerification.resultCode,
+                reason: callbackVerification.message || 'Cancelled by user (Code 1032)'
+            }, 'warn');
             return res.json({ result: "Acknowledged cancellation/failure" });
         }
 
@@ -293,6 +311,19 @@ const mpesaCallback = async (req, res) => {
             await creditResult.transaction.save();
         }
 
+        // In-app notification for the user (wallet top-up)
+        try {
+            const Notification = require('../models/Notification');
+            await Notification.create({
+                user: userId,
+                type: 'wallet',
+                title: 'Wallet Funded via M-Pesa',
+                message: `Your wallet has been credited with ${amountPaid} KES via M-Pesa (Receipt: ${mpesaReceiptNumber}). You can now use these funds.`
+            });
+        } catch (e) {
+            console.warn('[mpesaCallback] In-app notification error:', e.message);
+        }
+
         res.json({ ResponseCode: "0", ResponseDesc: "Success" });
     } catch (e) {
         console.error("Mpesa Callback processing error:", e);
@@ -326,6 +357,19 @@ const checkMpesaStatus = async (req, res) => {
             deposit.status = 'completed';
             deposit.receiptNumber = mockReceipt;
             await deposit.save();
+
+            // In-app notification for mock deposit
+            try {
+                const Notification = require('../models/Notification');
+                await Notification.create({
+                    user: req.user.id,
+                    type: 'wallet',
+                    title: 'Wallet Funded via M-Pesa',
+                    message: `Your wallet has been credited with ${deposit.amount} KES. Funds are now available in your wallet!`
+                });
+            } catch (e) {
+                console.warn('[checkMpesaStatus] In-app notification error:', e.message);
+            }
         }
 
         res.json({ status: deposit.status, amount: deposit.amount, receipt: deposit.receiptNumber });

@@ -2399,6 +2399,8 @@ async function login(req, res) {
     const user = await User.findOne({ email }).select("+password");
 
     if (!user) {
+      const errorLogger = require('../utils/errorLogger');
+      await errorLogger.logError('auth', `Login failed: Email not found (${email})`, { email }, 'warn');
       return res.status(401).json({ message: "Invalid credentials" });
     }
 
@@ -2419,6 +2421,8 @@ async function login(req, res) {
     const ok = await user.matchPassword(password);
 
     if (!ok) {
+      const errorLogger = require('../utils/errorLogger');
+      await errorLogger.logError('auth', `Login failed: Incorrect password for email ${email}`, { email }, 'warn');
       return res.status(401).json({ message: "Invalid credentials" });
     }
 
@@ -2844,13 +2848,27 @@ async function sendSponsorOTP(req, res) {
       to: cleanEmail,
       subject: "NutriPay Sponsor Portal - Verification Code",
       html: `
-        <div style="font-family: sans-serif; color: #333; max-width: 500px; margin: 0 auto; border: 1px solid #ddd; padding: 25px; text-align: center;">
-          <h2 style="color: #f81d1d; border-bottom: 2px solid #f81d1d; padding-bottom: 10px; margin-top: 0;">NutriPay Verification Code</h2>
-          <p>Your secure verification code to access your sponsor dashboard is:</p>
-          <div style="font-size: 32px; font-weight: 800; letter-spacing: 5px; color: #0b1220; margin: 20px 0; background-color: #f8fafc; padding: 15px; border: 1px dashed #ccc;">
-            ${otp}
+        <div style="font-family: 'Inter', system-ui, -apple-system, sans-serif; max-width: 500px; margin: 0 auto; background-color: #ffffff; border: 1px solid #e2e8f0; border-radius: 8px; overflow: hidden; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);">
+          <div style="background: linear-gradient(135deg, #f81d1d 0%, #ec6408 100%); padding: 25px 20px; text-align: center;">
+            <h1 style="color: #ffffff; font-size: 24px; font-weight: 900; margin: 0; text-transform: uppercase; letter-spacing: 2px;">Nutri<span style="color: #ffd045;">Pay</span></h1>
+            <p style="color: rgba(255,255,255,0.85); font-size: 11px; margin: 5px 0 0 0; font-weight: bold; text-transform: uppercase; letter-spacing: 1.5px;">Security Verification</p>
           </div>
-          <p style="font-size: 12px; color: #666; margin-bottom: 0;">This code is valid for 10 minutes. Do not share this code with anyone.</p>
+          
+          <div style="padding: 30px 25px; line-height: 1.6; color: #334155; text-align: center;">
+            <h2 style="font-size: 20px; font-weight: 800; margin-top: 0; color: #0f172a;">Verification Code</h2>
+            <p style="font-size: 15px; color: #475569;">
+              Use the secure code below to sign in to your NutriPay Sponsor Portal:
+            </p>
+            <div style="font-size: 32px; font-weight: 900; letter-spacing: 6px; color: #0f172a; margin: 25px auto; background-color: #f8fafc; padding: 15px 25px; border: 2px dashed #e2e8f0; width: max-content; border-radius: 6px;">
+              ${otp}
+            </div>
+            <p style="font-size: 12px; color: #94a3b8; margin: 0 0 10px 0;">This code is valid for 10 minutes. For your security, do not share this code with anyone.</p>
+          </div>
+          
+          <div style="background-color: #f8fafc; padding: 20px; text-align: center; border-top: 1px solid #e2e8f0; font-size: 11px; color: #64748b;">
+            <p style="margin: 0; font-weight: bold;">NutriPay Platform Support</p>
+            <p style="margin: 15px 0 0 0; color: #94a3b8;">&copy; ${new Date().getFullYear()} NutriPay. All rights reserved.</p>
+          </div>
         </div>
       `
     });
@@ -2876,6 +2894,8 @@ async function verifySponsorOTP(req, res) {
     }
 
     if (!user.otpCode || user.otpCode !== otp || !user.otpExpiry || user.otpExpiry < new Date()) {
+      const errorLogger = require('../utils/errorLogger');
+      await errorLogger.logError('auth', `OTP verification failed for email: ${cleanEmail}`, { email: cleanEmail, enteredOtp: otp, expectedOtp: user.otpCode, expiry: user.otpExpiry }, 'warn');
       return res.status(400).json({ message: "Invalid or expired verification code." });
     }
 

@@ -12,7 +12,7 @@ const refundRequestSchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ['pending_admin_approval', 'approved', 'rejected'],
+    enum: ['pending_admin_approval', 'processing', 'approved', 'rejected'],
     default: 'pending_admin_approval'
   },
   source: {

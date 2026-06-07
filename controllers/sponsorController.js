@@ -6,6 +6,7 @@ const walletService = require('../services/walletService');
 const escrowService = require('../services/escrowService');
 const notificationService = require('../services/notificationService');
 const SponsorRequest = require('../models/SponsorRequest');
+const Notification = require('../models/Notification');
 
 // @desc    Get sponsor dashboard stats
 // @route   GET /api/sponsor/dashboard
@@ -60,12 +61,24 @@ const fundStudentWallet = async (req, res) => {
       `Sponsorship funding from sponsor: ${sponsorId}`
     );
 
-    // Notify
+    // Notify student
     const student = await User.findById(studentId);
     try {
       await notificationService.sendPaymentSuccess(student.email, amount, 'Sponsorship Funding');
     } catch (e) {
       console.warn("Notification error:", e.message);
+    }
+
+    // In-app notification to sponsor
+    try {
+      await Notification.create({
+        user: sponsorId,
+        type: 'sponsorship',
+        title: 'Student Funded Successfully',
+        message: `You successfully funded ${amount} KES to ${student?.name || 'a student'}. Funds are now available for meal purchases.`
+      });
+    } catch (e) {
+      console.warn("In-app notification error:", e.message);
     }
 
     res.json({ message: 'Funding successful', newBalance: sponsorWallet.availableBalanceKES });
@@ -222,6 +235,7 @@ const fundRequest = async (req, res) => {
     await Subscription.create({
       student: studentId,
       planId: planId,
+      sponsor: sponsorId,
       status: 'active',
       startDate: startDate,
       endDate: endDate,
@@ -246,6 +260,18 @@ const fundRequest = async (req, res) => {
         title: 'New Student Order via Sponsor',
         message: `A student just scheduled deliveries totaling ${vendorTotals[vDoc._id.toString()]} KES.`
       });
+    }
+
+    // In-app notification to sponsor confirming the funding
+    try {
+      await Notification.create({
+        user: sponsorId,
+        type: 'sponsorship',
+        title: 'Pending Requests Funded',
+        message: `You approved and funded ${deliveries.length} delivery request(s) totaling ${totalKes} KES. Deliveries are now scheduled!`
+      });
+    } catch (e) {
+      console.warn("In-app notification error:", e.message);
     }
 
     res.json({
@@ -361,6 +387,7 @@ const quickPay = async (req, res) => {
     await Subscription.create({
       student: studentId,
       planId: request.planId || 'essential',
+      sponsor: sponsorId,
       status: 'active',
       startDate: request.startDate || new Date(),
       endDate: request.endDate || new Date(Date.now() + 27 * 24 * 60 * 60 * 1000),
@@ -527,6 +554,7 @@ const checkSponsorMpesaStatus = async (req, res) => {
       await Subscription.create({
         student: request.student,
         planId: request.planId || 'essential',
+        sponsor: sponsor._id,
         status: 'active',
         startDate: request.startDate || new Date(),
         endDate: request.endDate || new Date(Date.now() + 27 * 24 * 60 * 60 * 1000),

@@ -30,9 +30,16 @@ const getWalletBalance = async (req, res) => {
 const getTransactions = async (req, res) => {
   try {
     const { explainTransaction } = require('../utils/transactionUtils');
-    const transactions = await Transaction.find({
+    
+    let query = {
       $or: [{ fromUser: req.user.id }, { toUser: req.user.id }]
-    })
+    };
+    
+    if (req.user.role === 'student' || req.user.role === 'sponsor') {
+      query.transactionCategory = { $nin: ['escrow_release', 'commission'] };
+    }
+
+    const transactions = await Transaction.find(query)
     .populate('fromUser', 'name email role')
     .populate('toUser', 'name email role')
     .sort({ createdAt: -1 })

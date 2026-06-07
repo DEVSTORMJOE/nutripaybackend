@@ -106,7 +106,7 @@ const processDailyDeductions = async () => {
         orderType: 'subscription',
         stellarTxHash: stellarTxHash2 || null,
         status: 'completed',
-        description: `Daily platform commission for subscription ${sub._id}`
+        description: `Daily platform commission (${platformCommission}%) for subscription ${sub._id}`
       });
 
       console.log(`Successfully processed daily deduction of ${dailyCost} KES for subscription ${sub._id}`);

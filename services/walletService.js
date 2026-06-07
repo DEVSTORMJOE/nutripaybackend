@@ -8,9 +8,13 @@ const DeliveryLocation = require('../models/DeliveryLocation');
  * Find or create a user wallet
  */
 async function getOrCreateWallet(userId, role = 'student', session = null) {
-  let wallet = await Wallet.findOne({ user: userId }).session(session);
+  // Guard: only chain .session() when session is a real ClientSession, not null.
+  // Passing .session(null) can cause "session.inTransaction is not a function" in some
+  // MongoDB driver versions because it sets an explicit null session object.
+  const query = Wallet.findOne({ user: userId });
+  let wallet = session ? await query.session(session) : await query;
   if (!wallet) {
-    wallet = await Wallet.create([{
+    const docs = [{
       user: userId,
       walletType: role,
       availableBalanceKES: 0,
@@ -18,8 +22,9 @@ async function getOrCreateWallet(userId, role = 'student', session = null) {
       pendingWithdrawalKES: 0,
       status: 'active',
       walletFundingSources: []
-    }], { session });
-    wallet = wallet[0];
+    }];
+    const createdWallet = session ? await Wallet.create(docs, { session }) : await Wallet.create(docs);
+    wallet = createdWallet[0];
   }
   return wallet;
 }
@@ -36,7 +41,8 @@ async function creditWallet(
   sourceType = 'self',
   restrictedUsage = false,
   restrictedUsageType = 'none',
-  session = null
+  session = null,
+  skipTxLog = false
 ) {
   const wallet = await getOrCreateWallet(userId, 'student', session);
   
@@ -74,20 +80,31 @@ async function creditWallet(
   }
 
   // Save changes (runs pre-save hook to keep tokenBalanceNT in sync!)
-  await wallet.save({ session });
+  if (session) {
+    await wallet.save({ session });
+  } else {
+    await wallet.save();
+  }
 
-  const tx = await Transaction.create([{
-    transactionId: crypto.randomUUID(),
-    toUser: userId,
-    amountKES: Number(amountKes),
-    transactionCategory: category,
-    paymentMethod: paymentMethod,
-    status: 'completed',
-    settlementStatus: 'pending',
-    description: description
-  }], { session });
+  let tx = null;
+  if (!skipTxLog) {
+    const txDocs = [{
+      transactionId: crypto.randomUUID(),
+      toUser: userId,
+      amountKES: Number(amountKes),
+      transactionCategory: category,
+      paymentMethod: paymentMethod,
+      status: 'completed',
+      settlementStatus: 'pending',
+      description: description
+    }];
+    const createdTx = session
+      ? await Transaction.create(txDocs, { session })
+      : await Transaction.create(txDocs);
+    tx = createdTx[0];
+  }
 
-  return { wallet, transaction: tx[0] };
+  return { wallet, transaction: tx };
 }
 
 /**
@@ -185,18 +202,33 @@ async function debitWallet(
   wallet.availableBalanceKES = Number((wallet.availableBalanceKES - Number(amountKes)).toFixed(2));
   wallet.totalSpentKES = Number((wallet.totalSpentKES + Number(amountKes)).toFixed(2));
 
-  await wallet.save({ session });
+  if (session) {
+    await wallet.save({ session });
+  } else {
+    await wallet.save();
+  }
 
-  const tx = await Transaction.create([{
-    transactionId: crypto.randomUUID(),
-    fromUser: userId,
-    amountKES: Number(amountKes),
-    transactionCategory: category,
-    paymentMethod: paymentMethod,
-    status: 'completed',
-    settlementStatus: 'pending',
-    description: description
-  }], { session });
+  const tx = session
+    ? await Transaction.create([{
+        transactionId: crypto.randomUUID(),
+        fromUser: userId,
+        amountKES: Number(amountKes),
+        transactionCategory: category,
+        paymentMethod: paymentMethod,
+        status: 'completed',
+        settlementStatus: 'pending',
+        description: description
+      }], { session })
+    : await Transaction.create([{
+        transactionId: crypto.randomUUID(),
+        fromUser: userId,
+        amountKES: Number(amountKes),
+        transactionCategory: category,
+        paymentMethod: paymentMethod,
+        status: 'completed',
+        settlementStatus: 'pending',
+        description: description
+      }]);
 
   return { wallet, transaction: tx[0] };
 }
@@ -221,7 +253,7 @@ async function lockFunds(userId, amountKes, session = null) {
   wallet.availableBalanceKES = Number((wallet.availableBalanceKES - Number(amountKes)).toFixed(2));
   wallet.lockedBalanceKES = Number((wallet.lockedBalanceKES + Number(amountKes)).toFixed(2));
 
-  await wallet.save({ session });
+  await wallet.save(session ? { session } : {});
   return wallet;
 }
 
@@ -253,7 +285,7 @@ async function unlockFunds(userId, amountKes, session = null) {
     });
   }
 
-  await wallet.save({ session });
+  await wallet.save(session ? { session } : {});
   return wallet;
 }
 
@@ -300,7 +332,11 @@ async function refundFunds(userId, amountKes, category, sourceType = 'self', ses
     });
   }
 
-  await wallet.save({ session });
+  if (session) {
+    await wallet.save({ session });
+  } else {
+    await wallet.save();
+  }
   return wallet;
 }
 
@@ -333,7 +369,8 @@ async function splitCustomOrderRevenue(orderTotal, vendorUserId) {
   return {
     vendorShare,
     commission,
-    deliveryFee
+    deliveryFee,
+    platformCommissionPercent
   };
 }
 
@@ -354,10 +391,10 @@ async function processWalletCustomOrder(userId, vendorUserId, items, totalCost, 
   
   // Set paymentSource for auditing
   debitResult.transaction.paymentSource = 'student_wallet';
-  await debitResult.transaction.save({ session });
+  await debitResult.transaction.save(session ? { session } : {});
 
   // 2. Split revenue
-  const { vendorShare, commission } = await splitCustomOrderRevenue(totalCost, vendorUserId);
+  const { vendorShare, commission, platformCommissionPercent } = await splitCustomOrderRevenue(totalCost, vendorUserId);
 
   // 3. Credit Vendor wallet available balance instantly
   const creditResult = await creditWallet(
@@ -372,7 +409,7 @@ async function processWalletCustomOrder(userId, vendorUserId, items, totalCost, 
     session
   );
   creditResult.transaction.paymentSource = 'student_wallet';
-  await creditResult.transaction.save({ session });
+  await creditResult.transaction.save(session ? { session } : {});
 
   // 4. Create commission transaction log in MongoDB
   await Transaction.create([{
@@ -385,8 +422,8 @@ async function processWalletCustomOrder(userId, vendorUserId, items, totalCost, 
     paymentSource: 'student_wallet',
     status: 'completed',
     settlementStatus: 'pending',
-    description: `Platform commission for custom order`
-  }], { session });
+    description: `Platform commission (${platformCommissionPercent}%) for custom order`
+  }], session ? { session } : {});
 
   return { debitResult, creditResult, vendorShare, commission };
 }
@@ -397,7 +434,7 @@ async function processWalletCustomOrder(userId, vendorUserId, items, totalCost, 
 async function processMpesaDirectCustomOrder(checkoutRequestID, amountPaid, mpesaReceiptNumber, phonePaidFrom, session = null) {
   const CustomOrder = require('../models/CustomOrder');
   
-  const order = await CustomOrder.findOne({ checkoutRequestID }).session(session);
+  const order = session ? await CustomOrder.findOne({ checkoutRequestID }).session(session) : await CustomOrder.findOne({ checkoutRequestID });
   if (!order) throw new Error(`Custom order with checkoutRequestID ${checkoutRequestID} not found`);
   
   if (order.status === 'preparing' || order.status === 'ready' || order.status === 'delivered') {
@@ -406,15 +443,15 @@ async function processMpesaDirectCustomOrder(checkoutRequestID, amountPaid, mpes
 
   // 1. Update order status to paid and preparing
   order.status = 'preparing';
-  await order.save({ session });
+  await order.save(session ? { session } : {});
 
   // 2. Find vendor user
   const Vendor = require('../models/Vendor');
-  const vendorProfile = await Vendor.findById(order.vendor).session(session);
+  const vendorProfile = session ? await Vendor.findById(order.vendor).session(session) : await Vendor.findById(order.vendor);
   if (!vendorProfile) throw new Error("Vendor not found");
 
   // 3. Split revenue
-  const { vendorShare, commission } = await splitCustomOrderRevenue(amountPaid, vendorProfile.user);
+  const { vendorShare, commission, platformCommissionPercent } = await splitCustomOrderRevenue(amountPaid, vendorProfile.user);
 
   // 4. Credit vendor available balance instantly
   const creditResult = await creditWallet(
@@ -429,7 +466,7 @@ async function processMpesaDirectCustomOrder(checkoutRequestID, amountPaid, mpes
     session
   );
   creditResult.transaction.paymentSource = 'mpesa_direct';
-  await creditResult.transaction.save({ session });
+  await creditResult.transaction.save(session ? { session } : {});
 
   // 5. Create platform commission transaction log in MongoDB
   await Transaction.create([{
@@ -442,8 +479,8 @@ async function processMpesaDirectCustomOrder(checkoutRequestID, amountPaid, mpes
     paymentSource: 'mpesa_direct',
     status: 'completed',
     settlementStatus: 'pending',
-    description: `Platform commission for direct M-Pesa order (Receipt: ${mpesaReceiptNumber})`
-  }], { session });
+    description: `Platform commission (${platformCommissionPercent}%) for direct M-Pesa order (Receipt: ${mpesaReceiptNumber})`
+  }], session ? { session } : {});
 
   // 6. Create custom order transaction log representing the user's direct payment
   await Transaction.create([{
@@ -457,12 +494,12 @@ async function processMpesaDirectCustomOrder(checkoutRequestID, amountPaid, mpes
     status: 'completed',
     settlementStatus: 'pending',
     description: `Direct M-Pesa checkout for order ${order.orderId} (Receipt: ${mpesaReceiptNumber})`
-  }], { session });
+  }], session ? { session } : {});
 
   // 7. Create matching Delivery record for quick order
   const Student = require('../models/Student');
   const DeliveryLocation = require('../models/DeliveryLocation');
-  const studentProfile = await Student.findOne({ user: order.user }).session(session);
+  const studentProfile = session ? await Student.findOne({ user: order.user }).session(session) : await Student.findOne({ user: order.user });
   const Delivery = require('../models/Delivery');
 
   // Resolve deliveryLocation ObjectId — use stored ID or resolve from hostel string
@@ -515,7 +552,7 @@ async function processMpesaDirectCustomOrder(checkoutRequestID, amountPaid, mpes
     location: fullLocation || order.deliveryLocation || 'Campus',
     deliveryLocation: resolvedLocId || null,
     isCustom: true
-  }], { session });
+  }], session ? { session } : {});
 
   return { order, vendorShare, commission };
 }
@@ -525,18 +562,18 @@ async function processMpesaDirectCustomOrder(checkoutRequestID, amountPaid, mpes
  */
 async function refundCustomOrder(orderId, session = null) {
   const CustomOrder = require('../models/CustomOrder');
-  const order = await CustomOrder.findById(orderId).session(session);
+  const order = session ? await CustomOrder.findById(orderId).session(session) : await CustomOrder.findById(orderId);
   if (!order) throw new Error("Custom order not found");
   
   const Vendor = require('../models/Vendor');
-  const vendorProfile = await Vendor.findOne({ _id: order.vendor }).session(session);
+  const vendorProfile = session ? await Vendor.findOne({ _id: order.vendor }).session(session) : await Vendor.findOne({ _id: order.vendor });
   const vendorUserId = vendorProfile ? vendorProfile.user : null;
 
   const { vendorShare } = await splitCustomOrderRevenue(order.totalCost, vendorUserId);
 
   // Update order status
   order.status = 'cancelled';
-  await order.save({ session });
+  await order.save(session ? { session } : {});
 
   if (order.paymentMethod === 'wallet') {
     // 1. Credit student wallet available balance
@@ -564,7 +601,7 @@ async function refundCustomOrder(orderId, session = null) {
         console.warn(`Vendor wallet funding sources trace deduction failed: ${err.message}. Direct debit enforced.`);
       }
       
-      await vendorWallet.save({ session });
+      await vendorWallet.save(session ? { session } : {});
       
       // Log negative transfer
       await Transaction.create([{
@@ -577,7 +614,7 @@ async function refundCustomOrder(orderId, session = null) {
         status: 'completed',
         settlementStatus: 'pending',
         description: `Vendor refund deduction for custom order ${order.orderId}`
-      }], { session });
+      }], session ? { session } : {});
     }
   } else if (order.paymentMethod === 'mpesa_direct') {
     // Direct M-Pesa refund simulation
@@ -590,7 +627,7 @@ async function refundCustomOrder(orderId, session = null) {
       status: 'completed',
       settlementStatus: 'pending',
       description: `M-Pesa refund of custom order ${order.orderId} to original source`
-    }], { session });
+    }], session ? { session } : {});
 
     // Deduct vendor share
     if (vendorProfile) {
@@ -603,7 +640,7 @@ async function refundCustomOrder(orderId, session = null) {
         console.warn(`Vendor wallet funding sources trace deduction failed: ${err.message}. Direct debit enforced.`);
       }
       
-      await vendorWallet.save({ session });
+      await vendorWallet.save(session ? { session } : {});
 
       await Transaction.create([{
         transactionId: crypto.randomUUID(),
@@ -614,7 +651,7 @@ async function refundCustomOrder(orderId, session = null) {
         status: 'completed',
         settlementStatus: 'pending',
         description: `Vendor refund deduction (M-Pesa) for custom order ${order.orderId}`
-      }], { session });
+      }], session ? { session } : {});
     }
   }
 

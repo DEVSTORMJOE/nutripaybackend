@@ -197,14 +197,28 @@ exports.create = async (req, res, next) => {
             (unsubPageUrl ? `Unsubscribe: ${unsubPageUrl}\n\n` : "") +
             `— ${BRAND_NAME} Team`;
 
-          const html =
-            `<div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;line-height:1.6;color:#111827;">` +
-            `<p style="margin:0 0 10px 0;">Hi,</p>` +
-            `<p style="margin:0 0 10px 0;color:#4b5563;">Thanks for joining the <strong>${BRAND_NAME}</strong> newsletter.</p>` +
-            (unsubPageUrl
-              ? `<p style="margin:12px 0 0 0;font-size:12px;color:#6b7280;">Unsubscribe anytime: <a href="${unsubPageUrl}" style="color:#1d4ed8;text-decoration:underline;">${unsubPageUrl}</a></p>`
-              : "") +
-            `</div>`;
+          const html = `
+            <div style="font-family: 'Inter', system-ui, -apple-system, sans-serif; max-width: 600px; margin: 0 auto; background-color: #ffffff; border: 1px solid #e2e8f0; border-radius: 8px; overflow: hidden; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);">
+              <div style="background: linear-gradient(135deg, #f81d1d 0%, #ec6408 100%); padding: 25px 20px; text-align: center;">
+                <h1 style="color: #ffffff; font-size: 24px; font-weight: 900; margin: 0; text-transform: uppercase; letter-spacing: 2px;">Nutri<span style="color: #ffd045;">Pay</span></h1>
+                <p style="color: rgba(255,255,255,0.85); font-size: 11px; margin: 5px 0 0 0; font-weight: bold; text-transform: uppercase; letter-spacing: 1.5px;">Newsletter</p>
+              </div>
+              <div style="padding: 30px 25px; line-height: 1.6; color: #334155;">
+                <p style="font-size: 15px; margin-top: 0;">Hi there,</p>
+                <p style="font-size: 15px; color: #475569;">
+                  Thanks for subscribing to the official <strong>${BRAND_NAME}</strong> newsletter!
+                </p>
+                <p style="font-size: 15px; color: #475569;">
+                  We will keep you updated with the latest campus dining innovations, product updates, and platform announcements. Stay tuned!
+                </p>
+              </div>
+              <div style="background-color: #f8fafc; padding: 20px; text-align: center; border-top: 1px solid #e2e8f0; font-size: 11px; color: #64748b;">
+                <p style="margin: 0; font-weight: bold;">NutriPay Platform</p>
+                ${unsubPageUrl ? `<p style="margin: 5px 0 0 0;">Unsubscribe anytime: <a href="${unsubPageUrl}" style="color: #f81d1d; text-decoration: underline;">${unsubPageUrl}</a></p>` : ""}
+                <p style="margin: 15px 0 0 0; color: #94a3b8;">&copy; ${new Date().getFullYear()} NutriPay. All rights reserved.</p>
+              </div>
+            </div>
+          `;
 
           await sendMail({ to: lower, subject, text, html });
         } catch (e) {
@@ -399,10 +413,28 @@ exports.unsubscribeByEmail = async (req, res, next) => {
         to: lower,
         subject,
         text,
-        html: `<div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;line-height:1.6;color:#111827;">
-          <p><strong>${lower}</strong> has been unsubscribed from <strong>${BRAND_NAME}</strong>.</p>
-          ${pageUrl ? `<p>Subscribe again: <a href="${pageUrl}" style="color:#1d4ed8;text-decoration:underline;">${pageUrl}</a></p>` : ""}
-        </div>`,
+        html: `
+          <div style="font-family: 'Inter', system-ui, -apple-system, sans-serif; max-width: 600px; margin: 0 auto; background-color: #ffffff; border: 1px solid #e2e8f0; border-radius: 8px; overflow: hidden; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);">
+            <div style="background: linear-gradient(135deg, #f81d1d 0%, #ec6408 100%); padding: 25px 20px; text-align: center;">
+              <h1 style="color: #ffffff; font-size: 24px; font-weight: 900; margin: 0; text-transform: uppercase; letter-spacing: 2px;">Nutri<span style="color: #ffd045;">Pay</span></h1>
+              <p style="color: rgba(255,255,255,0.85); font-size: 11px; margin: 5px 0 0 0; font-weight: bold; text-transform: uppercase; letter-spacing: 1.5px;">Preferences Updated</p>
+            </div>
+            <div style="padding: 30px 25px; line-height: 1.6; color: #334155;">
+              <h2 style="font-size: 20px; font-weight: 800; margin-top: 0; color: #0f172a;">Unsubscribed</h2>
+              <p style="font-size: 15px; color: #475569;">
+                The email address <strong>${lower}</strong> has been successfully unsubscribed from the <strong>${BRAND_NAME}</strong> newsletter.
+              </p>
+              <p style="font-size: 15px; color: #475569;">
+                You will no longer receive updates, promotions, or platform newsletters from us.
+              </p>
+              ${pageUrl ? `<div style="margin-top: 25px; text-align: center;"><a href="${pageUrl}" style="background-color: #f81d1d; color: #ffffff; padding: 10px 20px; text-decoration: none; font-weight: bold; border-radius: 4px; display: inline-block;">Subscribe Again</a></div>` : ""}
+            </div>
+            <div style="background-color: #f8fafc; padding: 20px; text-align: center; border-top: 1px solid #e2e8f0; font-size: 11px; color: #64748b;">
+              <p style="margin: 0; font-weight: bold;">NutriPay Platform</p>
+              <p style="margin: 15px 0 0 0; color: #94a3b8;">&copy; ${new Date().getFullYear()} NutriPay. All rights reserved.</p>
+            </div>
+          </div>
+        `,
       });
     } catch (e) {
       console.error("[MAILER] unsubscribe confirmation failed:", e.message);

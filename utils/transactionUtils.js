@@ -112,7 +112,7 @@ function explainTransaction(tx) {
   } else if (category === 'subscription_lock') {
     source = fromLabel || "Student Wallet";
     destination = "Subscription Escrow";
-    purpose = desc || "Locked Subscription Funds";
+    purpose = desc || "Meal Plan Subscription Processed";
   } else if (category === 'escrow_release' || category === 'vendor_payout') {
     source = "Subscription Escrow";
     destination = toLabel || "Vendor Settlement";
@@ -120,7 +120,7 @@ function explainTransaction(tx) {
   } else if (category === 'commission') {
     source = fromLabel || "Vendor Settlement";
     destination = "Platform Revenue";
-    purpose = desc || "Platform Commission (10%)";
+    purpose = desc || "Platform Commission";
   } else if (category === 'custom_order' || category === 'quick_order' || category === 'mpesa_direct_order') {
     source = fromLabel || "Student Wallet";
     destination = toLabel || "Vendor Settlement";

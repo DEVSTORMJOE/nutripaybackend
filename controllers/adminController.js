@@ -932,16 +932,16 @@ const handleRefundApproval = async (req, res) => {
   const { status, rejectionReason } = req.body; // status: 'approved' or 'rejected'
 
   try {
-    // Atomic lock: only process 'pending_admin_approval' requests to prevent race conditions
-    const refundRequest = await RefundRequest.findOneAndUpdate(
-      { _id: id, status: 'pending_admin_approval' },
-      { $set: { status: status === 'approved' ? 'processing' : 'rejected' } },
-      { new: true }
-    ).populate('student', 'name email phone')
+    // Find request if in pending_admin_approval or rejected status.
+    const allowedStatuses = ['pending_admin_approval', 'rejected'];
+    const refundRequest = await RefundRequest.findOne({
+      _id: id,
+      status: { $in: allowedStatuses }
+    }).populate('student', 'name email phone')
      .populate('sponsor', 'name email');
 
     if (!refundRequest) {
-      return res.status(400).json({ message: 'Refund request not found or already processed.' });
+      return res.status(400).json({ message: 'Refund request not found, already approved, or currently processing.' });
     }
 
     // Audit record for every admin action
@@ -961,67 +961,136 @@ const handleRefundApproval = async (req, res) => {
     const logFilePath = path.join(__dirname, '../refund_security_audit.log');
     fs.appendFileSync(logFilePath, JSON.stringify(auditRecord) + '\n');
 
-    if (status === 'approved') {
-      // Get student's wallet to check current locked balance
-      const studentWallet = await Wallet.findOne({ user: refundRequest.student._id });
-      const currentLocked = studentWallet ? studentWallet.lockedBalanceKES : 0;
+    // Case 1: Changing status back to pending_admin_approval
+    if (status === 'pending_admin_approval') {
+      refundRequest.status = 'pending_admin_approval';
+      refundRequest.rejectionReason = '';
+      await refundRequest.save();
 
-      // Cap refund request amount to student's actual remaining locked balance
-      if (refundRequest.amountKES > currentLocked) {
-        console.log(`[Refund Request Capping] Request KES ${refundRequest.amountKES} exceeds locked balance KES ${currentLocked}. Capping to: ${currentLocked} KES.`);
-        refundRequest.amountKES = currentLocked;
-      }
-
-      // 1. Execute wallet refund: locked -> available for student (or sponsor)
-      //    escrowService.calculateRefund handles: deducting lockedBalanceKES, crediting available
-      let refundResult = null;
-      try {
-        refundResult = await escrowService.calculateRefund(
-          refundRequest.deliveryIds || [],
-          refundRequest.student._id,
-          refundRequest.sponsor?._id || null
-        );
-      } catch (refundErr) {
-        // Revert status if wallet operation fails
-        await RefundRequest.findByIdAndUpdate(id, { status: 'pending_admin_approval' });
-        console.error('Refund wallet operation failed:', refundErr.message);
-        return res.status(500).json({ message: 'Wallet refund failed: ' + refundErr.message });
-      }
-
-      // Use actual capped refund amount from escrow locked balance
-      const actualRefundKES = refundResult && refundResult.refundedKES !== undefined ? refundResult.refundedKES : refundRequest.amountKES;
-
-      // 2. Restore wallet status to active
+      // Freeze wallet
       await Wallet.findOneAndUpdate(
         { user: refundRequest.student._id },
-        { $set: { status: 'active' } }
+        { $set: { status: 'refund_pending' } }
       );
 
-      // 3. If M-Pesa phone is on file, trigger B2C payout with actual capped amount
+      return res.json({
+        message: 'Refund request status set back to pending. Student wallet status set to refund_pending.',
+        refundRequest
+      });
+    }
+
+    // Case 2: Transition to processing or rejected
+    refundRequest.status = status === 'approved' ? 'processing' : 'rejected';
+    await refundRequest.save();
+
+    if (status === 'approved') {
+      // Get student's wallet
+      const studentWallet = await Wallet.findOne({ user: refundRequest.student._id });
+      let actualRefundKES = refundRequest.amountKES;
       let payoutResult = null;
       const studentPhone = refundRequest.student?.phone;
-      if (studentPhone && actualRefundKES > 0) {
-        try {
-          payoutResult = await mpesaService.withdrawToMpesa(studentPhone, actualRefundKES);
-          console.log('[Refund B2C] M-Pesa payout initiated:', payoutResult);
-        } catch (payoutErr) {
-          // Log payout failure but don't fail the approval (wallet already corrected)
-          console.error('[Refund B2C] M-Pesa B2C payout initiation failed:', payoutErr.message);
+
+      if (refundRequest.source === 'available_balance_refund') {
+        // available_balance_refund logic:
+        const currentAvailable = studentWallet ? studentWallet.availableBalanceKES : 0;
+        if (actualRefundKES > currentAvailable) {
+          console.log(`[Refund Request Capping] Request KES ${actualRefundKES} exceeds available balance KES ${currentAvailable}. Capping.`);
+          actualRefundKES = currentAvailable;
         }
+
+        if (studentWallet) {
+          studentWallet.availableBalanceKES = Number((studentWallet.availableBalanceKES - actualRefundKES).toFixed(2));
+          studentWallet.status = 'active';
+          await studentWallet.save();
+        }
+
+        // Stellar reverse settlement: Escrow -> Treasury (since money is leaving the system)
+        let stellarTxHash = "";
+        let settlementStatus = "pending";
+        try {
+          const stellarTreasuryService = require('../services/stellarTreasuryService');
+          stellarTxHash = await stellarTreasuryService.reverseSettlement(actualRefundKES);
+          settlementStatus = "synced";
+        } catch (err) {
+          console.error("Stellar refund reverse settlement failed:", err.message);
+          settlementStatus = "failed";
+          const errorLogger = require('../utils/errorLogger');
+          await errorLogger.logError('escrow', `Stellar reverse settlement failed for available balance refund. KES: ${actualRefundKES}`, {
+            studentId: refundRequest.student._id,
+            actualRefundKES,
+            error: err.message
+          }, 'error');
+        }
+
+        // Trigger M-Pesa B2C payout with actual capped amount
+        if (studentPhone && actualRefundKES > 0) {
+          try {
+            const mpesaService = require('../services/mpesaService');
+            payoutResult = await mpesaService.withdrawToMpesa(studentPhone, actualRefundKES);
+            console.log('[Refund B2C] M-Pesa payout initiated:', payoutResult);
+          } catch (payoutErr) {
+            console.error('[Refund B2C] M-Pesa B2C payout initiation failed:', payoutErr.message);
+          }
+        }
+
+        // Create withdrawal transaction log
+        await Transaction.create({
+          transactionId: crypto.randomUUID(),
+          fromUser: refundRequest.student._id,
+          amountKES: actualRefundKES,
+          transactionCategory: 'refund',
+          paymentMethod: 'mpesa',
+          status: 'completed',
+          settlementStatus: settlementStatus,
+          stellarTxHash: stellarTxHash || null,
+          description: `Admin-approved refund payout of available balance to ${studentPhone || 'phone not on file'}. KES ${actualRefundKES}.`
+        });
+
+      } else {
+        // subscription_cancellation logic:
+        const currentLocked = studentWallet ? studentWallet.lockedBalanceKES : 0;
+
+        // Cap refund request amount to student's actual remaining locked balance
+        if (refundRequest.amountKES > currentLocked) {
+          console.log(`[Refund Request Capping] Request KES ${refundRequest.amountKES} exceeds locked balance KES ${currentLocked}. Capping to: ${currentLocked} KES.`);
+          refundRequest.amountKES = currentLocked;
+        }
+
+        // Execute wallet refund: locked -> available for student (or sponsor available)
+        let refundResult = null;
+        try {
+          refundResult = await escrowService.calculateRefund(
+            refundRequest.deliveryIds || [],
+            refundRequest.student._id
+          );
+        } catch (refundErr) {
+          // Revert status if wallet operation fails
+          await RefundRequest.findByIdAndUpdate(id, { status: 'pending_admin_approval' });
+          console.error('Refund wallet operation failed:', refundErr.message);
+          
+          const errorLogger = require('../utils/errorLogger');
+          await errorLogger.logError('wallet', `Refund wallet operation failed for request ${id}: ${refundErr.message}`, {
+            refundRequestId: id,
+            studentId: refundRequest.student?._id,
+            error: refundErr.stack || refundErr.message
+          }, 'error');
+
+          return res.status(500).json({ message: 'Wallet refund failed: ' + refundErr.message });
+        }
+
+        actualRefundKES = refundResult && refundResult.refundedKES !== undefined ? refundResult.refundedKES : refundRequest.amountKES;
+
+        // Restore wallet status to active
+        await Wallet.findOneAndUpdate(
+          { user: refundRequest.student._id },
+          { $set: { status: 'active' } }
+        );
+
+        // NOTE: For subscription_cancellation, we DO NOT trigger an M-Pesa payout.
+        // The funds have been returned to the available balance of the student or sponsor.
       }
 
-      // 4. Create withdrawal transaction log using actual capped amount
-      await Transaction.create({
-        transactionId: crypto.randomUUID(),
-        fromUser: refundRequest.student._id,
-        amountKES: actualRefundKES,
-        transactionCategory: 'refund',
-        paymentMethod: 'mpesa',
-        status: 'completed',
-        description: `Admin-approved refund payout to ${studentPhone || 'phone not on file'}. Capped to actual escrow lock of KES ${actualRefundKES}.`
-      });
-
-      // 5. Finalize refund request with actual capped amount
+      // Finalize refund request with actual capped amount
       refundRequest.amountKES = actualRefundKES;
       refundRequest.status = 'approved';
       refundRequest.approvedBy = req.user.id;
@@ -1029,7 +1098,7 @@ const handleRefundApproval = async (req, res) => {
       await refundRequest.save();
 
       return res.json({
-        message: `Refund of KES ${actualRefundKES} approved. Wallet updated and payout ${payoutResult ? 'initiated' : 'logged (no phone)'}`,
+        message: `Refund of KES ${actualRefundKES} approved. Wallet status reset to active.`,
         refundRequest
       });
 
@@ -1057,6 +1126,15 @@ const handleRefundApproval = async (req, res) => {
     }
   } catch (error) {
     console.error('Handle Refund Approval Error:', error);
+    try {
+      const errorLogger = require('../utils/errorLogger');
+      await errorLogger.logError('wallet', `Server error during refund approval for request ${id}: ${error.message}`, {
+        refundRequestId: id,
+        error: error.stack || error.message
+      }, 'error');
+    } catch (logErr) {
+      console.error("Failed to log refund error:", logErr);
+    }
     res.status(500).json({ message: 'Server error during refund approval: ' + error.message });
   }
 };
@@ -1104,6 +1182,45 @@ const getShuffleDemandStats = async (req, res) => {
   }
 };
 
+const getErrorLogs = async (req, res) => {
+  try {
+    const ErrorLog = require('../models/ErrorLog');
+    const logs = await ErrorLog.find()
+      .populate('resolvedBy', 'name email')
+      .sort({ timestamp: -1 })
+      .lean();
+    res.json(logs);
+  } catch (error) {
+    console.error("Get Error Logs Error:", error);
+    res.status(500).json({ message: "Failed to retrieve error logs." });
+  }
+};
+
+const resolveErrorLog = async (req, res) => {
+  const { id } = req.params;
+  try {
+    const ErrorLog = require('../models/ErrorLog');
+    const log = await ErrorLog.findByIdAndUpdate(
+      id,
+      {
+        resolved: true,
+        resolvedAt: new Date(),
+        resolvedBy: req.user.id
+      },
+      { new: true }
+    ).populate('resolvedBy', 'name email');
+
+    if (!log) {
+      return res.status(404).json({ message: "Error log not found." });
+    }
+
+    res.json({ message: "Error log resolved successfully.", log });
+  } catch (error) {
+    console.error("Resolve Error Log Error:", error);
+    res.status(500).json({ message: "Failed to resolve error log." });
+  }
+};
+
 module.exports = {
   getDashboard,
   getUsers,
@@ -1132,4 +1249,6 @@ module.exports = {
   getShuffleDemandStats,
   getRefundRequests,
   handleRefundApproval,
+  getErrorLogs,
+  resolveErrorLog
 };
