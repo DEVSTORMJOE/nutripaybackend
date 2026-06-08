@@ -132,6 +132,13 @@ async function checkoutCart(req, res) {
         totalPaidKES: subtotalKes
       });
 
+      // Clear out overlapping or future subscription deliveries to overwrite cancelled/old ones
+      await Delivery.deleteMany({
+        student: userId,
+        isCustom: { $ne: true },
+        scheduledDate: { $gte: startDate }
+      });
+
       // 3. Schedule the monthly deliveries based on WeeklyPlan or customSchedule
       const Meal = require('../models/Meal');
       const approvedMeals = await Meal.find({ approvalStatus: 'approved' }).lean();

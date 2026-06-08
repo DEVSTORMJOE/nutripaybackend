@@ -109,6 +109,12 @@ const processDailyDeductions = async () => {
         description: `Daily platform commission (${platformCommission}%) for subscription ${sub._id}`
       });
 
+      // Credit admin wallet for the commission
+      await Wallet.updateOne(
+        { walletType: 'admin' },
+        { $inc: { availableBalanceKES: Number(commission.toFixed(2)) } }
+      );
+
       console.log(`Successfully processed daily deduction of ${dailyCost} KES for subscription ${sub._id}`);
 
     } catch (error) {

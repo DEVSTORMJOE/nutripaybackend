@@ -34,7 +34,19 @@ const getDashboard = async (req, res) => {
 
     // Sum of Mongo commission transactions
     const commissionTxs = await Transaction.find({ transactionCategory: 'commission', status: 'completed' });
-    const revenueBalance = commissionTxs.reduce((acc, tx) => acc + (tx.amountKES || 0), 0);
+    const totalCommissions = commissionTxs.reduce((acc, tx) => acc + (tx.amountKES || 0), 0);
+
+    // Deduct completed admin withdrawals
+    const admins = await User.find({ role: 'admin' }).select('_id');
+    const adminIds = admins.map(a => a._id);
+    const withdrawalTxs = await Transaction.find({
+      transactionCategory: 'withdrawal',
+      status: 'completed',
+      fromUser: { $in: adminIds }
+    });
+    const totalWithdrawals = withdrawalTxs.reduce((acc, tx) => acc + (tx.amountKES || 0), 0);
+
+    const revenueBalance = Math.max(0, totalCommissions - totalWithdrawals);
 
     // 2. Withdrawals Counts
     const WithdrawalRequest = require('../models/WithdrawalRequest');
@@ -660,20 +672,26 @@ const getWeeklyPlans = async (req, res) => {
 
 const updateWeeklyPlan = async (req, res) => {
   const { planId, week, day, breakfast, lunch, supper } = req.body;
+  const cleanId = (val) => {
+    if (!val || val === "" || val === "null" || val === "undefined") {
+      return null;
+    }
+    return val;
+  };
   try {
     const plan = await WeeklyPlan.findOneAndUpdate(
       { planId, week: Number(week || 1), day },
       { 
-        breakfast: breakfast || null, 
-        lunch: lunch || null, 
-        supper: supper || null 
+        breakfast: cleanId(breakfast), 
+        lunch: cleanId(lunch), 
+        supper: cleanId(supper) 
       },
       { upsert: true, new: true }
     );
     res.json(plan);
   } catch (error) {
     console.error(error);
-    res.status(500).json({ message: 'Server Error' });
+    res.status(500).json({ message: 'Server Error: ' + error.message, error });
   }
 };
 
@@ -911,7 +929,14 @@ const getRefundRequests = async (req, res) => {
     if (status) filter.status = status;
 
     const refunds = await RefundRequest.find(filter)
-      .populate('student', 'name email phone')
+      .populate({
+        path: 'student',
+        select: 'name email phone linkedAccounts',
+        populate: {
+          path: 'linkedAccounts',
+          select: 'name email role'
+        }
+      })
       .populate('sponsor', 'name email')
       .populate('subscription', 'planId startDate endDate totalPaidKES')
       .sort({ createdAt: -1 })

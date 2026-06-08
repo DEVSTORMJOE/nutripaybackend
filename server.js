@@ -209,4 +209,12 @@ const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
   console.log(`Server started on port ${PORT}`);
   console.log("Allowed CORS origins:", allowedOrigins);
+
+  // Start student withdrawal hold checker
+  try {
+    const { startWithdrawalScheduler } = require('./utils/withdrawalScheduler');
+    startWithdrawalScheduler();
+  } catch (err) {
+    console.error("Failed to start student withdrawal scheduler:", err);
+  }
 });

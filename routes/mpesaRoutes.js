@@ -1,11 +1,12 @@
 const express = require('express');
 const router = express.Router();
-const { mpesaDeposit, mpesaCallback, checkMpesaStatus, mpesaWithdraw } = require('../controllers/mpesaController');
+const { mpesaDeposit, mpesaCallback, checkMpesaStatus, mpesaWithdraw, getMyWithdrawalRequests } = require('../controllers/mpesaController');
 const { protect } = require('../middleware/authMiddleware');
 
 // Route initiated by user on frontend
 router.post('/deposit', protect, mpesaDeposit);
 router.post('/withdraw', protect, mpesaWithdraw);
+router.get('/my-withdrawals', protect, getMyWithdrawalRequests);
 
 // User polls this to see if the webhook gave a success code
 router.get('/status/:checkoutRequestID', protect, checkMpesaStatus);

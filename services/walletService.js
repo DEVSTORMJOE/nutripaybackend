@@ -425,6 +425,14 @@ async function processWalletCustomOrder(userId, vendorUserId, items, totalCost, 
     description: `Platform commission (${platformCommissionPercent}%) for custom order`
   }], session ? { session } : {});
 
+  // Credit admin wallet for the commission
+  const Wallet = require('../models/Wallet');
+  await Wallet.updateOne(
+    { walletType: 'admin' },
+    { $inc: { availableBalanceKES: Number(commission.toFixed(2)) } },
+    session ? { session } : {}
+  );
+
   return { debitResult, creditResult, vendorShare, commission };
 }
 
@@ -481,6 +489,14 @@ async function processMpesaDirectCustomOrder(checkoutRequestID, amountPaid, mpes
     settlementStatus: 'pending',
     description: `Platform commission (${platformCommissionPercent}%) for direct M-Pesa order (Receipt: ${mpesaReceiptNumber})`
   }], session ? { session } : {});
+
+  // Credit admin wallet for the commission
+  const Wallet = require('../models/Wallet');
+  await Wallet.updateOne(
+    { walletType: 'admin' },
+    { $inc: { availableBalanceKES: Number(commission.toFixed(2)) } },
+    session ? { session } : {}
+  );
 
   // 6. Create custom order transaction log representing the user's direct payment
   await Transaction.create([{

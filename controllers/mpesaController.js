@@ -418,4 +418,15 @@ const mpesaWithdraw = async (req, res) => {
     }
 }
 
-module.exports = { mpesaDeposit, mpesaCallback, checkMpesaStatus, mpesaWithdraw };
+const getMyWithdrawalRequests = async (req, res) => {
+    try {
+        const WithdrawalRequest = require('../models/WithdrawalRequest');
+        const requests = await WithdrawalRequest.find({ user: req.user.id }).sort({ createdAt: -1 });
+        res.json(requests);
+    } catch (e) {
+        console.error("Failed to fetch my withdrawals:", e);
+        res.status(500).json({ message: "Failed to load withdrawal requests: " + e.message });
+    }
+}
+
+module.exports = { mpesaDeposit, mpesaCallback, checkMpesaStatus, mpesaWithdraw, getMyWithdrawalRequests };

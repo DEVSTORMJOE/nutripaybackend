@@ -16,8 +16,12 @@ const withdrawalRequestSchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ['pending_approval', 'approved', 'rejected'],
+    enum: ['pending_approval', 'processing', 'approved', 'rejected'],
     default: 'pending_approval'
+  },
+  notificationSent: {
+    type: Boolean,
+    default: false
   },
   approvedBy: {
     type: mongoose.Schema.Types.ObjectId,

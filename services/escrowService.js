@@ -177,6 +177,14 @@ async function releaseDailyVendorPayment(deliveryId, session = null) {
     description: `Platform commission (${platformCommission}%) for delivery ${deliveryId}`
   }], txOpts);
 
+  // Credit admin wallet for the commission
+  const Wallet = require('../models/Wallet');
+  await Wallet.updateOne(
+    { walletType: 'admin' },
+    { $inc: { availableBalanceKES: Number(commission.toFixed(2)) } },
+    txOpts
+  );
+
   return { studentWallet, vendorWallet: vendorWallet.wallet, transactions: [vendorTx[0], commissionTx[0]] };
 }
 
