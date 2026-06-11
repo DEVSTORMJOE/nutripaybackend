@@ -47,6 +47,12 @@ const deliveryPersonnelSchema = new mongoose.Schema(
       enum: ["pending", "approved", "rejected"],
       default: "pending",
     },
+
+    assignmentType: {
+      type: String,
+      enum: ["meal_delivery", "ndash", "both"],
+      default: "meal_delivery",
+    },
   },
   { timestamps: true }
 );

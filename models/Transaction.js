@@ -31,7 +31,9 @@ const transactionSchema = new mongoose.Schema({
       'commission',
       'escrow_release',
       'mpesa_direct_order',
-      'funding'
+      'funding',
+      'ndash_payment',
+      'ndash_payout'
     ],
     required: true
   },

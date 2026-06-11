@@ -152,7 +152,7 @@ const getUsers = async (req, res) => {
 
     const DeliveryPersonnel = require('../models/DeliveryPersonnel');
     const [vendors, deliveryStaff] = await Promise.all([
-      Vendor.find().select('user approvedStatus').lean(),
+      Vendor.find().select('user approvedStatus deliveryStaff').lean(),
       DeliveryPersonnel.find().select('user approvedStatus').lean()
     ]);
 
@@ -166,6 +166,16 @@ const getUsers = async (req, res) => {
       return acc;
     }, {});
 
+    // Map driver user ID to vendor ID
+    const driverVendorMap = {};
+    for (const v of vendors) {
+      if (v.deliveryStaff && Array.isArray(v.deliveryStaff)) {
+        for (const staffId of v.deliveryStaff) {
+          driverVendorMap[staffId.toString()] = v._id.toString();
+        }
+      }
+    }
+
     const mappedUsers = users.map(u => {
       let approvedStatus = u.isApproved !== false ? 'approved' : 'rejected';
       if (u.role === 'vendor') {
@@ -177,6 +187,7 @@ const getUsers = async (req, res) => {
       return {
         ...u,
         studentId: studentMap[u._id.toString()] || null,
+        vendorId: driverVendorMap[u._id.toString()] || null,
         approvedStatus
       };
     });
@@ -291,10 +302,16 @@ const createUser = async (req, res) => {
       return res.status(400).json({ message: 'User already exists' });
     }
 
+    const { normalizePhone, isValidPhone } = require('../utils/phoneUtils');
+    const normalizedPhone = normalizePhone(phone);
+    if (normalizedPhone && !isValidPhone(normalizedPhone)) {
+      return res.status(400).json({ message: 'Invalid phone number format. Enter a valid Kenyan number.' });
+    }
+
     const user = await User.create({
       name,
       email,
-      phone,
+      phone: normalizedPhone,
       password,
       role,
       isApproved: isApproved !== undefined ? isApproved : true,
@@ -324,7 +341,7 @@ const createUser = async (req, res) => {
 // @access  Private (Admin)
 const updateUser = async (req, res) => {
   try {
-    const { name, email, role, isApproved, approvedStatus, password } = req.body;
+    const { name, email, phone, role, isApproved, approvedStatus, password, vendorId } = req.body;
     const user = await User.findById(req.params.id);
 
     if (!user) {
@@ -333,6 +350,16 @@ const updateUser = async (req, res) => {
 
     if (name) user.name = name;
     if (email) user.email = email;
+    
+    if (phone !== undefined) {
+      const { normalizePhone, isValidPhone } = require('../utils/phoneUtils');
+      const normalizedPhone = normalizePhone(phone);
+      if (normalizedPhone && !isValidPhone(normalizedPhone)) {
+        return res.status(400).json({ message: 'Invalid phone number format. Enter a valid Kenyan number.' });
+      }
+      user.phone = normalizedPhone;
+    }
+
     if (role) user.role = role;
     
     let finalStatus = approvedStatus;
@@ -357,6 +384,26 @@ const updateUser = async (req, res) => {
           { approvedStatus: finalStatus },
           { upsert: true, new: true }
         );
+      }
+    }
+    
+    // Vendor assignment logic for delivery personnel
+    if (user.role === 'delivery' && vendorId) {
+      const Vendor = require('../models/Vendor');
+      
+      // Remove this delivery staff from any other vendor list first
+      await Vendor.updateMany(
+        { deliveryStaff: user._id },
+        { $pull: { deliveryStaff: user._id } }
+      );
+      
+      // Add this delivery staff to the new vendor list
+      const vendor = await Vendor.findById(vendorId);
+      if (vendor) {
+        if (!vendor.deliveryStaff.includes(user._id)) {
+          vendor.deliveryStaff.push(user._id);
+          await vendor.save();
+        }
       }
     }
     
@@ -597,9 +644,11 @@ const getDeliveryStaff = async (req, res) => {
     const deliveryProfiles = await DeliveryPersonnel.find({ user: { $in: drivers.map(d => d._id) } }).populate('assignedLocations').lean();
     const deliveryProfileMap = {};
     const deliveryLocationsMap = {};
+    const deliveryAssignmentTypeMap = {};
     for (const dp of deliveryProfiles) {
       deliveryProfileMap[dp.user.toString()] = dp.approvedStatus;
       deliveryLocationsMap[dp.user.toString()] = dp.assignedLocations || [];
+      deliveryAssignmentTypeMap[dp.user.toString()] = dp.assignmentType || "meal_delivery";
     }
 
     const mappedDrivers = drivers.map(d => ({
@@ -610,7 +659,8 @@ const getDeliveryStaff = async (req, res) => {
       status: assignedDriverIds.includes(d._id.toString()) ? "Assigned" : "Available",
       approvedStatus: deliveryProfileMap[d._id.toString()] || (d.isApproved ? "approved" : "pending"),
       vendorName: driverVendorMap[d._id.toString()] || "No Vendor Assigned",
-      assignedLocations: deliveryLocationsMap[d._id.toString()] || []
+      assignedLocations: deliveryLocationsMap[d._id.toString()] || [],
+      assignmentType: deliveryAssignmentTypeMap[d._id.toString()] || "meal_delivery"
     }));
 
     res.json(mappedDrivers);
@@ -620,11 +670,11 @@ const getDeliveryStaff = async (req, res) => {
   }
 };
 
-// @desc    Approve or reject delivery staff
+// @desc    Approve or reject delivery staff / update assignment type
 // @route   POST /api/admin/approve/delivery
 // @access  Private (Admin)
 const approveDelivery = async (req, res) => {
-  const { deliveryId, status } = req.body; // status: 'approved', 'rejected', 'pending'
+  const { deliveryId, status, assignmentType } = req.body; 
   try {
     const DeliveryPersonnel = require('../models/DeliveryPersonnel');
     const delivery = await DeliveryPersonnel.findOne({ user: deliveryId });
@@ -633,20 +683,25 @@ const approveDelivery = async (req, res) => {
       // If profile doesn't exist yet, we might need to create it
       const newDelivery = await DeliveryPersonnel.create({
         user: deliveryId,
-        approvedStatus: status
+        approvedStatus: status || 'approved',
+        assignmentType: assignmentType || 'meal_delivery'
       });
       const User = require('../models/User');
-      await User.findByIdAndUpdate(deliveryId, { isApproved: status === 'approved' });
-      return res.json({ message: `Delivery staff ${status}`, delivery: newDelivery });
+      if (status) await User.findByIdAndUpdate(deliveryId, { isApproved: status === 'approved' });
+      return res.json({ message: `Delivery staff updated`, delivery: newDelivery });
     }
 
-    delivery.approvedStatus = status;
+    if (status !== undefined) {
+      delivery.approvedStatus = status;
+      const User = require('../models/User');
+      await User.findByIdAndUpdate(deliveryId, { isApproved: status === 'approved' });
+    }
+    if (assignmentType !== undefined) {
+      delivery.assignmentType = assignmentType;
+    }
     await delivery.save();
 
-    const User = require('../models/User');
-    await User.findByIdAndUpdate(deliveryId, { isApproved: status === 'approved' });
-
-    res.json({ message: `Delivery staff ${status}` });
+    res.json({ message: `Delivery staff updated successfully` });
   } catch (error) {
     console.error("Approve Delivery Error:", error);
     res.status(500).json({ message: 'Server Error' });

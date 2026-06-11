@@ -244,13 +244,38 @@ const updateOrderStatus = async (req, res) => {
         }
 
         if (locId) {
-          const assignedStaff = await DeliveryPersonnel.findOne({
+          const candidateStaff = await DeliveryPersonnel.find({
             assignedLocations: locId,
-            approvedStatus: 'approved'
-          });
-          if (assignedStaff) {
-            delivery.deliveryAgent = assignedStaff.user;
-            console.log(`[AutoAssign] Driver auto-assigned: userId=${assignedStaff.user} for location=${locId}`);
+            approvedStatus: 'approved',
+            assignmentType: { $in: ['meal_delivery', 'both'] }
+          }).populate('user');
+
+          if (candidateStaff.length > 0) {
+            const NDashOrder = require('../models/NDashOrder');
+            const staffJobs = await Promise.all(
+              candidateStaff.map(async (staff) => {
+                if (!staff.user) return { staff, count: Infinity };
+                const mealCount = await Delivery.countDocuments({
+                  deliveryAgent: staff.user._id,
+                  status: { $in: ['assigned', 'picked_up'] }
+                });
+                const ndashCount = await NDashOrder.countDocuments({
+                  deliveryAgent: staff.user._id,
+                  status: { $in: ['pending', 'accepted', 'shopping', 'out_for_delivery'] }
+                });
+                return { staff, count: mealCount + ndashCount };
+              })
+            );
+
+            const validJobs = staffJobs.filter(j => j.staff.user);
+            if (validJobs.length > 0) {
+              validJobs.sort((a, b) => a.count - b.count);
+              const assignedStaff = validJobs[0].staff;
+              delivery.deliveryAgent = assignedStaff.user._id;
+              console.log(`[AutoAssign] Driver auto-assigned: userId=${assignedStaff.user._id} for location=${locId} with active count=${validJobs[0].count}`);
+            } else {
+              console.warn(`[AutoAssign] No valid user linked to driver profiles for location=${locId}`);
+            }
           } else {
             console.warn(`[AutoAssign] No approved driver found for location=${locId}`);
           }

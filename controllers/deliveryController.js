@@ -166,7 +166,13 @@ const getAssignedDeliveries = async (req, res) => {
     const deliveries = await Delivery.find({
       $or: [
         { deliveryAgent: req.user.id },
-        { deliveryLocation: { $in: assignedLocationIds } }
+        { 
+          deliveryLocation: { $in: assignedLocationIds },
+          $or: [
+            { deliveryAgent: null },
+            { deliveryAgent: { $exists: false } }
+          ]
+        }
       ],
       status: { $nin: ["delivered", "cancelled", "failed"] }
     })
@@ -236,6 +242,9 @@ const confirmPickup = async (req, res) => {
     });
 
     if (!delivery) return res.status(404).json({ message: "Delivery not found or not assigned to you." });
+    if (delivery.deliveryAgent && String(delivery.deliveryAgent) !== String(req.user.id)) {
+      return res.status(400).json({ message: "This delivery is already assigned to another driver." });
+    }
     if (delivery.status === "delivered") return res.status(400).json({ message: "Order already delivered." });
     if (delivery.status === "picked_up") return res.status(400).json({ message: "Order already marked as picked up." });
 
@@ -286,6 +295,9 @@ const markDelivered = async (req, res) => {
       });
 
     if (!delivery) return res.status(404).json({ message: "Delivery not found" });
+    if (delivery.deliveryAgent && String(delivery.deliveryAgent) !== String(req.user.id)) {
+      return res.status(400).json({ message: "This delivery is already assigned to another driver." });
+    }
 
     if (delivery.status === "delivered") {
       return res.status(400).json({ message: "Order is already delivered." });

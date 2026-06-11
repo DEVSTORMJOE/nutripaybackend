@@ -2,15 +2,12 @@
 require("dotenv").config();
 const axios = require("axios");
 
+const { normalizePhone } = require("./phoneUtils");
+
 // Normalize Kenyan numbers to +2547XXXXXXXX
 function normalizeKePhone(input) {
-  if (!input) return "";
-  let p = String(input).replace(/\s+/g, "");
-  if (/^07\d{8}$/.test(p)) return "+254" + p.slice(1);
-  if (/^01\d{8}$/.test(p)) return "+254" + p.slice(1);
-  if (/^7\d{8}$/.test(p))  return "+254" + p;
-  if (/^\+\d{10,15}$/.test(p)) return p;
-  return p;
+  const normalized = normalizePhone(input);
+  return normalized ? "+" + normalized : "";
 }
 
 function mask(str) {

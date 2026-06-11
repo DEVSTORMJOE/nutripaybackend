@@ -1,21 +1,7 @@
 // controllers/profileController.js
 const User = require("../models/User");
 
-// Normalize Kenyan numbers to +2547XXXXXXXX (same spirit as your sendSms util)
-function normalizeKePhone(input) {
-  if (!input) return "";
-  let p = String(input).replace(/\s+/g, "");
-  if (/^07\d{8}$/.test(p)) return "+254" + p.slice(1);
-  if (/^01\d{8}$/.test(p)) return "+254" + p.slice(1);
-  if (/^7\d{8}$/.test(p)) return "+254" + p;
-  if (/^\+\d{10,15}$/.test(p)) return p;
-  return p;
-}
-
-function isValidPhone(p) {
-  // Keep permissive but safe: E.164 (+XXXXXXXXXX...)
-  return /^\+\d{10,15}$/.test(p);
-}
+const { normalizePhone, isValidPhone } = require("../utils/phoneUtils");
 
 // PUT /api/profile/phone
 async function updateMyPhone(req, res) {
@@ -28,12 +14,12 @@ async function updateMyPhone(req, res) {
       return res.json({ message: "Phone cleared", phone: "" });
     }
 
-    const phone = normalizeKePhone(raw);
+    const phone = normalizePhone(raw);
 
     if (!isValidPhone(phone)) {
       return res.status(400).json({
         message:
-          "Invalid phone number. Use Kenyan format (07XXXXXXXX / 7XXXXXXXX) or E.164 (+2547XXXXXXXX).",
+          "Invalid phone number. Use Kenyan format (e.g., 07XXXXXXXX, +2547XXXXXXXX, or 2547XXXXXXXX).",
       });
     }
 
@@ -99,9 +85,14 @@ async function updateProfile(req, res) {
     const userUpdates = {};
     if (updateData.name !== undefined) userUpdates.name = updateData.name;
     if (updateData.phone !== undefined) {
-      const normalizedPhone = normalizeKePhone(updateData.phone);
-      // ✅ Check phone uniqueness — reject if another user already has this number
+      const normalizedPhone = normalizePhone(updateData.phone);
       if (normalizedPhone) {
+        if (!isValidPhone(normalizedPhone)) {
+          return res.status(400).json({
+            message: "Invalid phone number. Use Kenyan format (e.g., 07XXXXXXXX, +2547XXXXXXXX, or 2547XXXXXXXX).",
+          });
+        }
+        // ✅ Check phone uniqueness — reject if another user already has this number
         const existingPhone = await User.findOne({ phone: normalizedPhone, _id: { $ne: userId } }).select("_id").lean();
         if (existingPhone) {
           return res.status(409).json({

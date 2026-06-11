@@ -1987,6 +1987,7 @@ const Vendor = require("../models/Vendor");
 const Sponsor = require("../models/Sponsor");
 const DeliveryPersonnel = require("../models/DeliveryPersonnel");
 const admin = require("../config/firebaseAdmin");
+const { normalizePhone, isValidPhone } = require("../utils/phoneUtils");
 
 function signToken(userId) {
   return jwt.sign({ id: userId }, process.env.JWT_SECRET, { expiresIn: "7d" });
@@ -2013,7 +2014,7 @@ function isFilled(value) {
 }
 
 function isValidKenyanPhone(value) {
-  return /^(?:07|01)\d{8}$/.test(cleanString(value));
+  return isValidPhone(value);
 }
 
 function isValidEmail(value) {
@@ -2322,7 +2323,7 @@ async function register(req, res) {
       return res.status(409).json({ message: "Email already in use" });
     }
 
-    const phoneExists = await User.findOne({ phone: cleanString(phone) });
+    const phoneExists = await User.findOne({ phone: normalizePhone(phone) });
 
     if (phoneExists) {
       return res.status(409).json({ message: "Phone number already in use" });
@@ -2333,7 +2334,7 @@ async function register(req, res) {
     const userPayload = {
       name: cleanString(name),
       email,
-      phone: cleanString(phone),
+      phone: normalizePhone(phone),
       role: cleanRole,
       isApproved: reviewOnly ? false : true,
       requiresPasswordChange: reviewOnly ? true : false,
@@ -2662,11 +2663,11 @@ async function completeProfile(req, res) {
 
     const { name, phone, profile = {} } = req.body || {};
 
-    const cleanPhone = cleanString(phone);
+    const normalizedPhone = normalizePhone(phone);
 
-    if (!isValidKenyanPhone(cleanPhone)) {
+    if (!isValidKenyanPhone(normalizedPhone)) {
       return res.status(400).json({
-        message: "Phone number must be 10 digits and start with 07 or 01.",
+        message: "Invalid phone number. Use Kenyan format (e.g., 07XXXXXXXX, +2547XXXXXXXX, or 2547XXXXXXXX).",
       });
     }
 
@@ -2689,7 +2690,7 @@ async function completeProfile(req, res) {
       user.name = cleanString(name);
     }
 
-    user.phone = cleanPhone;
+    user.phone = normalizedPhone;
     user.requiresPasswordChange = false;
 
     await user.save();
@@ -2729,7 +2730,7 @@ async function completeProfile(req, res) {
       const sponsorPayload = {
         organizationName: cleanString(profile.organizationName || user.name),
         contactPerson: cleanString(profile.contactPerson || user.name),
-        contactPhone: cleanPhone,
+        contactPhone: normalizedPhone,
         sponsorshipType: cleanString(profile.sponsorshipType),
         monthlyBudget: Number(profile.monthlyBudget || 0),
         approvedStatus: "approved",
