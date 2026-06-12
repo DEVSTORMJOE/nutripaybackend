@@ -39,6 +39,9 @@ async function initiateDeposit(userId, phone, amountKes, orderType = 'monthly_su
         throw new Error("Failed to generate Safaricom Auth Token");
     }
 
+    const { normalizePhone } = require('../utils/phoneUtils');
+    const formattedPhone = normalizePhone(phone);
+
     const shortcode = process.env.DARAJA_SHORTCODE || "174379";
     const passkey = process.env.DARAJA_PASSKEY || "bfb279f9aa9bdbcf158e97dd71a467cd2e0c893059b10f78e6b72ada1ed2c919";
     const timestamp = new Date().toISOString().replace(/[^0-9]/g, "").slice(0, -3);
@@ -54,9 +57,9 @@ async function initiateDeposit(userId, phone, amountKes, orderType = 'monthly_su
         Timestamp: timestamp,
         TransactionType: "CustomerPayBillOnline",
         Amount: Number(amountKes),
-        PartyA: phone,       
+        PartyA: formattedPhone,       
         PartyB: shortcode,   
-        PhoneNumber: phone,  
+        PhoneNumber: formattedPhone,  
         CallBackURL: `${callbackUrl}/${userId}`, 
         AccountReference: reference,
         TransactionDesc: desc
@@ -124,7 +127,9 @@ function verifyCallback(body) {
  * Mock M-Pesa B2C withdrawal
  */
 async function withdrawToMpesa(phone, amountKes) {
-    console.log(`[M-Pesa B2C Payout] Dispatched ${amountKes} KES to ${phone}.`);
+    const { normalizePhone } = require('../utils/phoneUtils');
+    const formattedPhone = normalizePhone(phone);
+    console.log(`[M-Pesa B2C Payout] Dispatched ${amountKes} KES to ${formattedPhone}.`);
     // Sandbox or mock payout succeeds instantly
     return {
         success: true,

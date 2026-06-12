@@ -46,7 +46,8 @@ async function listMeals(req, res) {
       .lean();
     return res.json(items);
   } catch (e) {
-    return res.status(500).json({ message: "Failed to load meals" });
+    console.error("Error in listMeals:", e);
+    return res.status(500).json({ message: "Failed to load meals", error: e.message });
   }
 }
 
@@ -101,7 +102,8 @@ async function createMeal(req, res) {
 
     return res.status(201).json(created.toObject());
   } catch (e) {
-    return res.status(500).json({ message: "Failed to create meal" });
+    console.error("Error in createMeal:", e);
+    return res.status(500).json({ message: "Failed to create meal", error: e.message });
   }
 }
 
@@ -138,7 +140,8 @@ async function updateMeal(req, res) {
 
     return res.json(updated);
   } catch (e) {
-    return res.status(500).json({ message: "Failed to update meal" });
+    console.error("Error in updateMeal:", e);
+    return res.status(500).json({ message: "Failed to update meal", error: e.message });
   }
 }
 
@@ -152,7 +155,8 @@ async function setMealActive(req, res) {
 
     return res.json(updated);
   } catch (e) {
-    return res.status(500).json({ message: "Failed to update status" });
+    console.error("Error in setMealActive:", e);
+    return res.status(500).json({ message: "Failed to update status", error: e.message });
   }
 }
 
@@ -166,7 +170,8 @@ async function deleteMeal(req, res) {
 
     return res.json({ ok: true, meal: updated });
   } catch (e) {
-    return res.status(500).json({ message: "Failed to delete meal" });
+    console.error("Error in deleteMeal:", e);
+    return res.status(500).json({ message: "Failed to delete meal", error: e.message });
   }
 }
 
@@ -183,7 +188,8 @@ async function getWeeklyPlans(req, res) {
       .lean();
     return res.json(plans);
   } catch (e) {
-    return res.status(500).json({ message: "Failed to load weekly plans" });
+    console.error("Error in getWeeklyPlans:", e);
+    return res.status(500).json({ message: "Failed to load weekly plans", error: e.message });
   }
 }
 

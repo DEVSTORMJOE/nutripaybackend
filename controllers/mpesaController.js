@@ -251,6 +251,26 @@ const mpesaCallback = async (req, res) => {
             return res.json({ ResponseCode: "0", ResponseDesc: "Success" });
         }
 
+        // Check if this callback corresponds to an N-Dash errand order
+        const NDashOrder = require('../models/NDashOrder');
+        const nDashOrder = await NDashOrder.findOne({ checkoutRequestID });
+
+        if (nDashOrder) {
+            if (!callbackVerification.success) {
+                console.log(`[N-Dash M-Pesa Callback] STK Push for N-Dash order ${nDashOrder.orderId} failed or cancelled.`);
+                nDashOrder.status = 'cancelled';
+                await nDashOrder.save();
+                return res.json({ ResponseCode: "0", ResponseDesc: "Success" });
+            }
+
+            // Successfully paid N-Dash order!
+            const { amountPaid, mpesaReceiptNumber, phonePaidFrom } = callbackVerification;
+            const ndashPaymentService = require('../services/ndashPaymentService');
+            await ndashPaymentService.processPaymentSuccess(checkoutRequestID, mpesaReceiptNumber, amountPaid, phonePaidFrom);
+
+            return res.json({ ResponseCode: "0", ResponseDesc: "Success" });
+        }
+
         let depositRecord = await MpesaDeposit.findOne({ checkoutRequestID });
 
         if (!callbackVerification.success) {

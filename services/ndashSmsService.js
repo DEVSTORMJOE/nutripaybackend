@@ -11,13 +11,36 @@ async function sendOrderNotification(order, driverUser) {
     : 'http://localhost:3000';
   const processingLink = `${frontendUrl}/delivery/ndash-process/${order._id}`;
   
+  const Student = require('../models/Student');
+  let studentProfile = null;
+  try {
+    studentProfile = await Student.findOne({ user: order.student?._id || order.student }).populate('deliveryLocation');
+  } catch (err) {
+    console.error('Error fetching student profile for SMS details:', err.message);
+  }
+
+  let locationDetail = '';
+  const hostelName = order.deliveryLocation?.hostelResidence || studentProfile?.hostel || '';
+  const blockName = order.deliveryLocation?.block || studentProfile?.block || '';
+  const landmarkInfo = order.deliveryLocation?.landmark || studentProfile?.landmark || '';
+  const roomDetails = order.room || studentProfile?.room || 'N/A';
+  
+  if (order.customLocation) {
+    locationDetail = `Location: ${order.customLocation}\nDetails: ${order.room || 'N/A'}`;
+  } else if (hostelName) {
+    const blockPart = blockName ? `, Block ${blockName}` : '';
+    const landmarkPart = landmarkInfo ? `\nLandmark: ${landmarkInfo}` : '';
+    locationDetail = `Hostel: ${hostelName}${blockPart}\nRoom: ${roomDetails}${landmarkPart}`;
+  } else {
+    locationDetail = `Location: Campus\nRoom/Spot Details: ${order.room || 'N/A'}`;
+  }
+
   const itemsText = order.items.map(item => `* ${item.name} (Qty: ${item.quantity})`).join('\n');
   const message = `N-Dash Order #${order.orderId}
 
 Student: ${order.student?.name || 'Student'}
 Phone: ${order.student?.phone || 'N/A'}
-Hostel: ${order.deliveryLocation?.hostelResidence || 'N/A'}
-Room: ${order.room || 'N/A'}
+${locationDetail}
 
 Items:
 ${itemsText}

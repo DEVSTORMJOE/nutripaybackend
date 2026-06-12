@@ -210,32 +210,40 @@ const getDriverOrders = async (req, res) => {
       return res.status(403).json({ message: 'Not registered as delivery staff' });
     }
 
-    const assignedLocationIds = driverProfile.assignedLocations || [];
+    const isHistory = req.query.history === 'true';
 
-    // Find orders where:
-    // 1. Driver is explicitly assigned, or
-    // 2. Order location is assigned to driver AND status is paid/pending (driver can accept it)
-    const orders = await NDashOrder.find({
-      $or: [
-        { deliveryAgent: req.user.id },
-        { 
-          deliveryLocation: { $in: assignedLocationIds }, 
-          status: 'pending',
-          $or: [{ deliveryAgent: null }, { deliveryAgent: { $exists: false } }]
-        },
-        { 
-          deliveryLocation: null, 
-          status: 'pending',
-          $or: [{ deliveryAgent: null }, { deliveryAgent: { $exists: false } }]
-        },
-        { 
-          deliveryLocation: { $exists: false }, 
-          status: 'pending',
-          $or: [{ deliveryAgent: null }, { deliveryAgent: { $exists: false } }]
-        }
-      ],
-      status: { $nin: ['pending_payment', 'delivered', 'cancelled'] }
-    })
+    let query;
+    if (isHistory) {
+      query = {
+        deliveryAgent: req.user.id,
+        status: { $in: ['delivered', 'cancelled'] }
+      };
+    } else {
+      const assignedLocationIds = driverProfile.assignedLocations || [];
+      query = {
+        $or: [
+          { deliveryAgent: req.user.id },
+          { 
+            deliveryLocation: { $in: assignedLocationIds }, 
+            status: 'pending',
+            $or: [{ deliveryAgent: null }, { deliveryAgent: { $exists: false } }]
+          },
+          { 
+            deliveryLocation: null, 
+            status: 'pending',
+            $or: [{ deliveryAgent: null }, { deliveryAgent: { $exists: false } }]
+          },
+          { 
+            deliveryLocation: { $exists: false }, 
+            status: 'pending',
+            $or: [{ deliveryAgent: null }, { deliveryAgent: { $exists: false } }]
+          }
+        ],
+        status: { $nin: ['pending_payment', 'delivered', 'cancelled'] }
+      };
+    }
+
+    const orders = await NDashOrder.find(query)
       .populate('student', 'name email phone')
       .populate('deliveryLocation')
       .sort({ createdAt: -1 })
