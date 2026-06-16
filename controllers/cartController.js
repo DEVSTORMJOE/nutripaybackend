@@ -765,6 +765,16 @@ async function addSponsorCheckout(req, res) {
     
     let createdDeliveryIds = [];
     if (deliveriesToInsert.length > 0) {
+      if (cart.schedule && Object.keys(cart.schedule).length > 0 && !monthlyTemplate) {
+        const dates = Object.keys(cart.schedule).map(d => new Date(d)).sort((a, b) => a - b);
+        if (dates.length > 0) {
+          startDate = dates[0];
+        }
+      }
+      await Delivery.deleteMany({
+        student: userId,
+        scheduledDate: { $gte: startDate }
+      });
       const inserted = await Delivery.create(deliveriesToInsert);
       createdDeliveryIds = inserted.map(d => d._id);
     }
@@ -854,6 +864,12 @@ async function customPlanCheckout(req, res) {
 
     // 3. Schedule the custom deliveries day by day
     const Delivery = require('../models/Delivery');
+
+    // Clear out overlapping or future deliveries to overwrite cancelled/old ones
+    await Delivery.deleteMany({
+      student: userId,
+      scheduledDate: { $gte: today }
+    });
     const Meal = require('../models/Meal');
     
     // Find default approved meals
@@ -1126,6 +1142,12 @@ async function customPlanSponsorCheckout(req, res) {
 
     const Delivery = require('../models/Delivery');
     const Meal = require('../models/Meal');
+
+    // Clear out overlapping or future deliveries to overwrite cancelled/old ones
+    await Delivery.deleteMany({
+      student: userId,
+      scheduledDate: { $gte: today }
+    });
     
     // Find default approved meals
     const approvedMeals = await Meal.find({ approvalStatus: 'approved' }).lean();

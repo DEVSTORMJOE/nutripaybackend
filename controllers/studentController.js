@@ -179,6 +179,14 @@ const optOut = async (req, res) => {
       await subscription.save();
     }
 
+    // Set student profile subscription active status to false
+    const Student = require('../models/Student');
+    const studentProfile = await Student.findOne({ user: studentId });
+    if (studentProfile) {
+      studentProfile.subscriptionActive = false;
+      await studentProfile.save();
+    }
+
     // Create Refund Request
     const RefundRequest = require('../models/RefundRequest');
     const refundRequest = await RefundRequest.create({

@@ -6,6 +6,28 @@ const User = require('../models/User');
 const ndashService = require('../services/ndashService');
 const ndashPaymentService = require('../services/ndashPaymentService');
 const crypto = require('crypto');
+const cloudinary = require('../config/cloudinary');
+
+/**
+ * Extract a Cloudinary public_id from a Cloudinary URL.
+ * Returns null if the URL is not a Cloudinary URL.
+ */
+function extractCloudinaryPublicId(url) {
+  if (!url || typeof url !== 'string') return null;
+  if (!url.includes('res.cloudinary.com')) return null;
+  try {
+    const urlObj = new URL(url);
+    const parts = urlObj.pathname.split('/');
+    const uploadIdx = parts.indexOf('upload');
+    if (uploadIdx === -1) return null;
+    let start = uploadIdx + 1;
+    if (/^v\d+$/.test(parts[start])) start++;
+    const withExtension = parts.slice(start).join('/');
+    return withExtension.replace(/\.[^/.]+$/, '');
+  } catch {
+    return null;
+  }
+}
 
 // ==========================================
 // STUDENT CONTROLLERS
@@ -473,10 +495,23 @@ const updateProduct = async (req, res) => {
 // Delete Product
 const deleteProduct = async (req, res) => {
   try {
-    const prod = await NDashProduct.findByIdAndDelete(req.params.id);
+    const prod = await NDashProduct.findById(req.params.id);
     if (!prod) {
       return res.status(404).json({ message: 'Product not found' });
     }
+
+    // Attempt Cloudinary image deletion — non-fatal
+    const publicId = extractCloudinaryPublicId(prod.imageUrl);
+    if (publicId) {
+      try {
+        const result = await cloudinary.uploader.destroy(publicId);
+        console.log(`[Cloudinary] Deleted NDash product image '${publicId}':`, result.result);
+      } catch (cloudErr) {
+        console.warn(`[Cloudinary] Could not delete NDash product image '${publicId}':`, cloudErr.message);
+      }
+    }
+
+    await NDashProduct.findByIdAndDelete(req.params.id);
     res.json({ message: 'Product deleted successfully' });
   } catch (error) {
     console.error(error);

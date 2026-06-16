@@ -490,7 +490,7 @@ const checkSponsorMpesaStatus = async (req, res) => {
     }
 
     // Auto-approve mock deposits in sandbox/demo environment immediately upon polling
-    if (request.status === 'pending' && (checkoutRequestID.startsWith('ws_CO_Mock_') || process.env.NODE_ENV === 'development')) {
+    if (request.status === 'pending' && checkoutRequestID.startsWith('ws_CO_Mock_')) {
       console.log(`[Mock Sponsor Deposit] Auto-approving mock deposit of ${request.amountKES} KES`);
       const mockReceipt = "MOCK_DEP_" + Math.random().toString(36).substring(4).toUpperCase();
       

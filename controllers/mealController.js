@@ -30,6 +30,34 @@
 // server/controllers/mealController.js
 const Meal = require("../models/Meal");
 const WeeklyPlan = require("../models/WeeklyPlan");
+const cloudinary = require("../config/cloudinary");
+
+/**
+ * Extract a Cloudinary public_id from a Cloudinary URL.
+ * Returns null if the URL is not a Cloudinary URL.
+ * Example URL: https://res.cloudinary.com/<cloud>/image/upload/v1234/nutripay/abc123.webp
+ * => public_id: nutripay/abc123
+ */
+function extractCloudinaryPublicId(url) {
+  if (!url || typeof url !== "string") return null;
+  // Must be a Cloudinary hosted URL
+  if (!url.includes("res.cloudinary.com")) return null;
+  try {
+    const urlObj = new URL(url);
+    const parts = urlObj.pathname.split("/");
+    // path: /cloud/image/upload/vXXXX/folder/file.ext
+    const uploadIdx = parts.indexOf("upload");
+    if (uploadIdx === -1) return null;
+    // skip version segment (starts with 'v' followed by digits)
+    let start = uploadIdx + 1;
+    if (/^v\d+$/.test(parts[start])) start++;
+    const withExtension = parts.slice(start).join("/");
+    // Remove file extension
+    return withExtension.replace(/\.[^/.]+$/, "");
+  } catch {
+    return null;
+  }
+}
 
 async function listMeals(req, res) {
   try {
@@ -84,12 +112,15 @@ async function createMeal(req, res) {
     const currency = String(req.body.currency || "KES").trim() || "KES";
     const nutrition = normalizeNutrition(req.body.nutrition);
     const isActive = req.body.isActive === false ? false : true;
+    const vendorId = req.body.vendorId || req.body.vendor || null;
 
     if (!name) return res.status(400).json({ message: "Name is required" });
     if (!category) return res.status(400).json({ message: "Invalid category" });
     if (!Number.isFinite(price) || price < 0) return res.status(400).json({ message: "Invalid price" });
+    if (!vendorId) return res.status(400).json({ message: "Vendor is required. Please select a vendor." });
 
     const created = await Meal.create({
+      vendor: vendorId,
       name,
       category,
       description,
@@ -98,6 +129,7 @@ async function createMeal(req, res) {
       currency,
       nutrition,
       isActive,
+      approvalStatus: "approved", // Admin-created meals are auto-approved
     });
 
     return res.status(201).json(created.toObject());
@@ -133,6 +165,10 @@ async function updateMeal(req, res) {
 
     if (req.body.isActive !== undefined) patch.isActive = Boolean(req.body.isActive);
 
+    // Allow admin to reassign vendor on edit
+    const vendorId = req.body.vendorId || req.body.vendor;
+    if (vendorId) patch.vendor = vendorId;
+
     if (patch.name !== undefined && !patch.name) return res.status(400).json({ message: "Name is required" });
 
     const updated = await Meal.findByIdAndUpdate(id, patch, { new: true }).lean();
@@ -164,11 +200,25 @@ async function deleteMeal(req, res) {
   try {
     const id = req.params.id;
 
-    // Prefer soft-delete to avoid breaking historical carts:
-    const updated = await Meal.findByIdAndUpdate(id, { isActive: false }, { new: true }).lean();
-    if (!updated) return res.status(404).json({ message: "Meal not found" });
+    // Fetch first so we can clean up its Cloudinary image
+    const meal = await Meal.findById(id).lean();
+    if (!meal) return res.status(404).json({ message: "Meal not found" });
 
-    return res.json({ ok: true, meal: updated });
+    // Attempt Cloudinary deletion — non-fatal if it fails
+    const publicId = extractCloudinaryPublicId(meal.imageUrl);
+    if (publicId) {
+      try {
+        const result = await cloudinary.uploader.destroy(publicId);
+        console.log(`[Cloudinary] Deleted image '${publicId}':`, result.result);
+      } catch (cloudErr) {
+        console.warn(`[Cloudinary] Could not delete image '${publicId}':`, cloudErr.message);
+      }
+    }
+
+    // Hard-delete the DB record
+    await Meal.findByIdAndDelete(id);
+
+    return res.json({ ok: true, message: "Meal deleted successfully" });
   } catch (e) {
     console.error("Error in deleteMeal:", e);
     return res.status(500).json({ message: "Failed to delete meal", error: e.message });
