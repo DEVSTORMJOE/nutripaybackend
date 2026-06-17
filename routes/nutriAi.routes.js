@@ -38,15 +38,50 @@ router.post("/chat", limiter, async (req, res) => {
       return res.status(400).json({ message: "No message provided." });
     }
 
+    let mealsInfo = "";
+    let faqsInfo = "";
+    try {
+      const Meal = require("../models/Meal");
+      const FAQ = require("../models/FAQ");
+
+      const activeMeals = await Meal.find({ approvalStatus: "approved", isActive: true })
+        .select("name category description price currency nutrition")
+        .lean();
+
+      const allFaqs = await FAQ.find()
+        .select("question answer category")
+        .sort({ order: 1 })
+        .lean();
+
+      if (activeMeals && activeMeals.length > 0) {
+        mealsInfo = "\n\nAvailable Menu Meals (Names, categories, prices, ingredients/description, and nutrition):\n" + activeMeals.map(m => {
+          const nut = m.nutrition || {};
+          const nutStr = `Calories: ${nut.calories || 0}kcal, Protein: ${nut.protein_g || 0}g, Carbs: ${nut.carbs_g || 0}g, Fat: ${nut.fat_g || 0}g`;
+          return `- ${m.name} (${m.category}): ${m.price} ${m.currency || 'KES'}. Description: ${m.description || 'N/A'}. Nutrition: ${nutStr}`;
+        }).join("\n");
+      }
+
+      if (allFaqs && allFaqs.length > 0) {
+        faqsInfo = "\n\nFrequently Asked Questions (FAQs) & Campus Support Info:\n" + allFaqs.map(f => {
+          return `Q: ${f.question}\nA: ${f.answer}`;
+        }).join("\n\n");
+      }
+    } catch (dbErr) {
+      console.error("Nutri AI: Failed to load context from database:", dbErr);
+    }
+
     const system = {
       role: "system",
       content:
-        "You are Nutri AI, a nutrition assistant for a campus meals app. " +
-        "Give practical nutrition guidance, simple meal suggestions, and portion ideas. " +
-        "Do not diagnose or treat medical conditions. " +
-        "If the user mentions a medical condition, pregnancy, eating disorder, or medication, " +
-        "advise consulting a clinician and provide general safe guidance only. " +
-        "Be concise, structured, and ask one clarifying question when needed.",
+        "You are Nutri AI, a helpful, friendly, and accurate nutrition and campus meals assistant for the NutriPay campus meals application. " +
+        "Use the official meals menu and FAQ context provided below to answer user queries accurately. " +
+        "When a user asks about meal prices, food ingredients, nutritional content, app usage instructions, refunds, or support, " +
+        "always cross-reference and answer based on this official data. " +
+        "If they ask about something unavailable or out of scope, explain nicely that it's not currently supported. " +
+        "Do not diagnose or treat medical conditions, and never expose backend code, database credentials, vendor tokens, or administrative/user private information. " +
+        "Be concise, structured, and ask one clarifying question when needed." +
+        mealsInfo +
+        faqsInfo,
     };
 
     const payload = {

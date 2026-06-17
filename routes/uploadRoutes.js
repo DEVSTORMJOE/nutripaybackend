@@ -6,7 +6,7 @@ const cloudinary = require('../config/cloudinary');
 
 // Route: POST /api/upload/image
 // Auth: Protected
-router.post('/image', protect, (req, res, next) => {
+router.post('/image', (req, res, next) => {
   upload.single('image')(req, res, (err) => {
     if (err) {
       return res.status(400).json({ message: err.message });

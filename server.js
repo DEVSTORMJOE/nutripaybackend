@@ -167,9 +167,11 @@ app.use("/api/delivery-locations", DeliveryLocation);
 
 app.use("/api/profile", require("./routes/profileRoutes"));
 app.use("/api/nutri-ai", require("./routes/nutriAi.routes"));
-app.use("/api/waitinglist/count", require("./routes/waitingListRoutes"));
+app.use("/api/waitinglist", require("./routes/waitingListRoutes"));
 app.use("/api/ndash", require("./routes/ndashRoutes"));
 app.use("/api/upload", require("./routes/uploadRoutes"));
+app.use("/api/support", require("./routes/supportRoutes"));
+app.use("/api/faqs", require("./routes/faqRoutes"));
 /* =========================
    BASIC ROUTE
    ========================= */

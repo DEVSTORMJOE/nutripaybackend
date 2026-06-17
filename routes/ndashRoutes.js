@@ -39,7 +39,7 @@ router.post('/driver/orders/:id/generate-code', protect, role('delivery'), gener
 router.post('/driver/orders/:id/verify-code', protect, role('delivery'), verifyDriverCode);
 
 // Admin product management routes
-router.get('/products', protect, getProducts); // student needs to retrieve suggested products too
+router.get('/products', getProducts); // student and guests need to retrieve suggested products too
 router.post('/admin/products', protect, role('admin'), createProduct);
 router.put('/admin/products/:id', protect, role('admin'), updateProduct);
 router.delete('/admin/products/:id', protect, role('admin'), deleteProduct);
