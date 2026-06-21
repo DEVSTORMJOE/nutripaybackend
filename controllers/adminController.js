@@ -903,17 +903,23 @@ const assignLocationsToDriver = async (req, res) => {
 const getSettings = async (req, res) => {
   try {
     const SystemSettings = require('../models/SystemSettings');
-    let essential = await SystemSettings.findOne({ key: 'essential_price' });
-    if (!essential) essential = await SystemSettings.create({ key: 'essential_price', value: 3500 });
-    let elite = await SystemSettings.findOne({ key: 'elite_price' });
-    if (!elite) elite = await SystemSettings.create({ key: 'elite_price', value: 4500 });
-    let ultimate = await SystemSettings.findOne({ key: 'ultimate_price' });
-    if (!ultimate) ultimate = await SystemSettings.create({ key: 'ultimate_price', value: 6000 });
-    
+    const getSettingVal = async (key, defaultVal) => {
+      let setting = await SystemSettings.findOne({ key });
+      if (!setting) {
+        setting = await SystemSettings.create({ key, value: defaultVal });
+      }
+      return setting.value;
+    };
+
     res.json({
-      essential_price: essential.value,
-      elite_price: elite.value,
-      ultimate_price: ultimate.value
+      essential_price: await getSettingVal('essential_price', 3500),
+      elite_price: await getSettingVal('elite_price', 4500),
+      ultimate_price: await getSettingVal('ultimate_price', 6000),
+      banner_small_url: await getSettingVal('banner_small_url', ''),
+      banner_large_url: await getSettingVal('banner_large_url', ''),
+      banner_timer: await getSettingVal('banner_timer', 5),
+      banner_visible: await getSettingVal('banner_visible', false),
+      banner_content: await getSettingVal('banner_content', '<h1>Welcome to NutriPay!</h1><p>Special banner description here.</p>')
     });
   } catch (e) {
     console.error(e);
@@ -922,12 +928,33 @@ const getSettings = async (req, res) => {
 };
 
 const updateSettings = async (req, res) => {
-  const { essential_price, elite_price, ultimate_price } = req.body;
+  const {
+    essential_price,
+    elite_price,
+    ultimate_price,
+    banner_small_url,
+    banner_large_url,
+    banner_timer,
+    banner_visible,
+    banner_content
+  } = req.body;
   try {
     const SystemSettings = require('../models/SystemSettings');
-    if (essential_price !== undefined) await SystemSettings.findOneAndUpdate({ key: 'essential_price' }, { value: Number(essential_price) }, { upsert: true });
-    if (elite_price !== undefined) await SystemSettings.findOneAndUpdate({ key: 'elite_price' }, { value: Number(elite_price) }, { upsert: true });
-    if (ultimate_price !== undefined) await SystemSettings.findOneAndUpdate({ key: 'ultimate_price' }, { value: Number(ultimate_price) }, { upsert: true });
+    const updateKey = async (key, val) => {
+      if (val !== undefined) {
+        await SystemSettings.findOneAndUpdate({ key }, { value: val }, { upsert: true });
+      }
+    };
+
+    await updateKey('essential_price', essential_price !== undefined ? Number(essential_price) : undefined);
+    await updateKey('elite_price', elite_price !== undefined ? Number(elite_price) : undefined);
+    await updateKey('ultimate_price', ultimate_price !== undefined ? Number(ultimate_price) : undefined);
+    await updateKey('banner_small_url', banner_small_url);
+    await updateKey('banner_large_url', banner_large_url);
+    await updateKey('banner_timer', banner_timer !== undefined ? Number(banner_timer) : undefined);
+    await updateKey('banner_visible', banner_visible);
+    await updateKey('banner_content', banner_content);
+
     res.json({ message: "System settings updated successfully!" });
   } catch (e) {
     console.error(e);
