@@ -8,4 +8,9 @@ const notificationSchema = new mongoose.Schema({
   isRead: { type: Boolean, default: false }
 }, { timestamps: true });
 
+notificationSchema.post('save', function(doc) {
+  const { dispatchNotification } = require('../utils/notificationDispatcher');
+  dispatchNotification(doc).catch(err => console.error('Failed to dispatch notification:', err));
+});
+
 module.exports = mongoose.model('Notification', notificationSchema);

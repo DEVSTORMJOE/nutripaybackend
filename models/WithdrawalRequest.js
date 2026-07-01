@@ -7,7 +7,7 @@ const withdrawalRequestSchema = new mongoose.Schema({
     required: true
   },
   amountKES: {
-    type: Number,
+    type: mongoose.Schema.Types.Decimal128,
     required: true
   },
   phone: {
@@ -16,8 +16,8 @@ const withdrawalRequestSchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ['pending_approval', 'processing', 'approved', 'rejected'],
-    default: 'pending_approval'
+    enum: ['requested', 'approved', 'b2c_pending', 'b2c_success', 'completed', 'rejected'],
+    default: 'requested'
   },
   notificationSent: {
     type: Boolean,
@@ -47,6 +47,14 @@ const withdrawalRequestSchema = new mongoose.Schema({
   mpesaReceipt: {
     type: String,
     default: null
+  },
+  conversationId: {
+    type: String,
+    sparse: true
+  },
+  originatorConversationId: {
+    type: String,
+    sparse: true
   }
 }, { timestamps: true });
 

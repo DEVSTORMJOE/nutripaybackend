@@ -1,3 +1,4 @@
+const mongoose = require('mongoose');
 const Wallet = require('../models/Wallet');
 const Transaction = require('../models/Transaction');
 const crypto = require('crypto');
@@ -8,18 +9,15 @@ const DeliveryLocation = require('../models/DeliveryLocation');
  * Find or create a user wallet
  */
 async function getOrCreateWallet(userId, role = 'student', session = null) {
-  // Guard: only chain .session() when session is a real ClientSession, not null.
-  // Passing .session(null) can cause "session.inTransaction is not a function" in some
-  // MongoDB driver versions because it sets an explicit null session object.
   const query = Wallet.findOne({ user: userId });
   let wallet = session ? await query.session(session) : await query;
   if (!wallet) {
     const docs = [{
       user: userId,
       walletType: role,
-      availableBalanceKES: 0,
-      lockedBalanceKES: 0,
-      pendingWithdrawalKES: 0,
+      availableBalanceKES: mongoose.Types.Decimal128.fromString("0.00"),
+      lockedBalanceKES: mongoose.Types.Decimal128.fromString("0.00"),
+      pendingWithdrawalKES: mongoose.Types.Decimal128.fromString("0.00"),
       status: 'active',
       walletFundingSources: []
     }];
@@ -42,7 +40,8 @@ async function creditWallet(
   restrictedUsage = false,
   restrictedUsageType = 'none',
   session = null,
-  skipTxLog = false
+  skipTxLog = false,
+  extraTxFields = {}
 ) {
   const wallet = await getOrCreateWallet(userId, 'student', session);
   
@@ -51,12 +50,15 @@ async function creditWallet(
   }
 
   // Credit locally
-  wallet.availableBalanceKES = Number((wallet.availableBalanceKES + Number(amountKes)).toFixed(2));
+  const currentAvailable = parseFloat(wallet.availableBalanceKES ? wallet.availableBalanceKES.toString() : '0');
+  wallet.availableBalanceKES = mongoose.Types.Decimal128.fromString((currentAvailable + parseFloat(amountKes)).toFixed(2));
   
   if (category === 'deposit') {
-    wallet.totalDepositedKES = Number((wallet.totalDepositedKES + Number(amountKes)).toFixed(2));
+    const currentDeposited = parseFloat(wallet.totalDepositedKES ? wallet.totalDepositedKES.toString() : '0');
+    wallet.totalDepositedKES = mongoose.Types.Decimal128.fromString((currentDeposited + parseFloat(amountKes)).toFixed(2));
   } else if (category === 'refund') {
-    wallet.totalRefundedKES = Number((wallet.totalRefundedKES + Number(amountKes)).toFixed(2));
+    const currentRefunded = parseFloat(wallet.totalRefundedKES ? wallet.totalRefundedKES.toString() : '0');
+    wallet.totalRefundedKES = mongoose.Types.Decimal128.fromString((currentRefunded + parseFloat(amountKes)).toFixed(2));
   }
 
   // Update Funding Sources attribution buckets
@@ -67,11 +69,12 @@ async function creditWallet(
   );
 
   if (existingSource) {
-    existingSource.amountKES = Number((existingSource.amountKES + Number(amountKes)).toFixed(2));
+    const currentSourceAmt = parseFloat(existingSource.amountKES ? existingSource.amountKES.toString() : '0');
+    existingSource.amountKES = mongoose.Types.Decimal128.fromString((currentSourceAmt + parseFloat(amountKes)).toFixed(2));
   } else {
     wallet.walletFundingSources.push({
       sourceType,
-      amountKES: Number(amountKes),
+      amountKES: mongoose.Types.Decimal128.fromString(parseFloat(amountKes).toFixed(2)),
       restrictedUsage,
       restrictedUsageType,
       nutritionCategory: [],
@@ -88,20 +91,42 @@ async function creditWallet(
 
   let tx = null;
   if (!skipTxLog) {
+    const txId = extraTxFields.transactionId || crypto.randomUUID();
     const txDocs = [{
-      transactionId: crypto.randomUUID(),
+      transactionId: txId,
       toUser: userId,
-      amountKES: Number(amountKes),
+      amountKES: mongoose.Types.Decimal128.fromString(parseFloat(amountKes).toFixed(2)),
       transactionCategory: category,
       paymentMethod: paymentMethod,
       status: 'completed',
       settlementStatus: 'pending',
-      description: description
+      description: description,
+      ...extraTxFields
     }];
     const createdTx = session
       ? await Transaction.create(txDocs, { session })
       : await Transaction.create(txDocs);
     tx = createdTx[0];
+
+    // Ledger Entry Log
+    try {
+      const ledgerService = require('./ledgerService');
+      let ledgerType = 'deposit';
+      if (category === 'refund') ledgerType = 'refund';
+      else if (category === 'funding') ledgerType = 'transfer';
+      else if (category === 'vendor_payout') ledgerType = 'escrow_release';
+
+      await ledgerService.recordLedgerEntry({
+        debitWallet: null,
+        creditWallet: wallet._id,
+        amountKES: mongoose.Types.Decimal128.fromString(parseFloat(amountKes).toFixed(2)),
+        transactionId: txId,
+        reference: description || `Wallet credit (${category})`,
+        ledgerType
+      }, session);
+    } catch (ledgerErr) {
+      console.error("Failed to create ledger entry during creditWallet:", ledgerErr.message);
+    }
   }
 
   return { wallet, transaction: tx };
@@ -111,20 +136,8 @@ async function creditWallet(
  * Deduct funds from Wallet Funding Sources following strict prioritization rules
  */
 function deductFromFundingSources(wallet, amountKes, isSubscription = false) {
-  let remainingToDeduct = Number(amountKes);
+  let remainingToDeduct = parseFloat(amountKes);
 
-  // Sorting priorities:
-  // For Subscriptions:
-  // 1. Sponsored subscription-only restricted (sourceType='sponsor', restrictedUsageType='subscription_only')
-  // 2. Sponsored unrestricted surplus (sourceType='sponsor', restrictedUsage=false)
-  // 3. Self-funded (sourceType='self')
-  // 4. Others
-  //
-  // For Custom Orders / General Debits:
-  // 1. Sponsored unrestricted surplus (sourceType='sponsor', restrictedUsage=false)
-  // 2. Self-funded (sourceType='self')
-  // (Skip/lowest priority for subscription-only restricted)
-  
   let sortedSources = [...wallet.walletFundingSources];
   sortedSources.sort((a, b) => {
     const getPriority = (source) => {
@@ -151,9 +164,12 @@ function deductFromFundingSources(wallet, amountKes, isSubscription = false) {
       continue;
     }
 
-    const deductFromSource = Math.min(source.amountKES, remainingToDeduct);
-    source.amountKES = Number((source.amountKES - deductFromSource).toFixed(2));
-    remainingToDeduct = Number((remainingToDeduct - deductFromSource).toFixed(2));
+    const sourceAmt = parseFloat(source.amountKES ? source.amountKES.toString() : '0');
+    if (sourceAmt <= 0) continue;
+
+    const deductFromSource = Math.min(sourceAmt, remainingToDeduct);
+    source.amountKES = mongoose.Types.Decimal128.fromString((sourceAmt - deductFromSource).toFixed(2));
+    remainingToDeduct = parseFloat((remainingToDeduct - deductFromSource).toFixed(2));
     
     // Find the original source reference and update it
     let orig = wallet.walletFundingSources.find(
@@ -171,7 +187,7 @@ function deductFromFundingSources(wallet, amountKes, isSubscription = false) {
   }
 
   // Filter out completely depleted sources
-  wallet.walletFundingSources = wallet.walletFundingSources.filter(s => s.amountKES > 0);
+  wallet.walletFundingSources = wallet.walletFundingSources.filter(s => parseFloat(s.amountKES.toString()) > 0);
 }
 
 /**
@@ -184,7 +200,8 @@ async function debitWallet(
   paymentMethod,
   description = "",
   isSubscription = false,
-  session = null
+  session = null,
+  extraTxFields = {}
 ) {
   const wallet = await getOrCreateWallet(userId, 'student', session);
   
@@ -192,15 +209,17 @@ async function debitWallet(
     throw new Error(`Cannot debit wallet: Wallet is ${wallet.status}`);
   }
 
-  if (wallet.availableBalanceKES < Number(amountKes)) {
+  const currentAvailable = parseFloat(wallet.availableBalanceKES ? wallet.availableBalanceKES.toString() : '0');
+  if (currentAvailable < parseFloat(amountKes)) {
     throw new Error("Insufficient available balance");
   }
 
   // Deduct from local buckets
   deductFromFundingSources(wallet, amountKes, isSubscription);
 
-  wallet.availableBalanceKES = Number((wallet.availableBalanceKES - Number(amountKes)).toFixed(2));
-  wallet.totalSpentKES = Number((wallet.totalSpentKES + Number(amountKes)).toFixed(2));
+  wallet.availableBalanceKES = mongoose.Types.Decimal128.fromString((currentAvailable - parseFloat(amountKes)).toFixed(2));
+  const currentSpent = parseFloat(wallet.totalSpentKES ? wallet.totalSpentKES.toString() : '0');
+  wallet.totalSpentKES = mongoose.Types.Decimal128.fromString((currentSpent + parseFloat(amountKes)).toFixed(2));
 
   if (session) {
     await wallet.save({ session });
@@ -208,27 +227,41 @@ async function debitWallet(
     await wallet.save();
   }
 
+  const txId = extraTxFields.transactionId || crypto.randomUUID();
+  const txDocs = [{
+    transactionId: txId,
+    fromUser: userId,
+    amountKES: mongoose.Types.Decimal128.fromString(parseFloat(amountKes).toFixed(2)),
+    transactionCategory: category,
+    paymentMethod: paymentMethod,
+    status: 'completed',
+    settlementStatus: 'pending',
+    description: description,
+    ...extraTxFields
+  }];
+
   const tx = session
-    ? await Transaction.create([{
-        transactionId: crypto.randomUUID(),
-        fromUser: userId,
-        amountKES: Number(amountKes),
-        transactionCategory: category,
-        paymentMethod: paymentMethod,
-        status: 'completed',
-        settlementStatus: 'pending',
-        description: description
-      }], { session })
-    : await Transaction.create([{
-        transactionId: crypto.randomUUID(),
-        fromUser: userId,
-        amountKES: Number(amountKes),
-        transactionCategory: category,
-        paymentMethod: paymentMethod,
-        status: 'completed',
-        settlementStatus: 'pending',
-        description: description
-      }]);
+    ? await Transaction.create(txDocs, { session })
+    : await Transaction.create(txDocs);
+
+  // Ledger Entry Log
+  try {
+    const ledgerService = require('./ledgerService');
+    let ledgerType = 'withdrawal';
+    if (category === 'funding') ledgerType = 'transfer';
+    else if (category === 'custom_order' || category === 'ndash_payment') ledgerType = 'escrow_lock';
+    
+    await ledgerService.recordLedgerEntry({
+      debitWallet: wallet._id,
+      creditWallet: null,
+      amountKES: mongoose.Types.Decimal128.fromString(parseFloat(amountKes).toFixed(2)),
+      transactionId: txId,
+      reference: description || `Wallet debit (${category})`,
+      ledgerType
+    }, session);
+  } catch (ledgerErr) {
+    console.error("Failed to create ledger entry during debitWallet:", ledgerErr.message);
+  }
 
   return { wallet, transaction: tx[0] };
 }
@@ -243,15 +276,17 @@ async function lockFunds(userId, amountKes, session = null) {
     throw new Error(`Cannot lock funds: Wallet is ${wallet.status}`);
   }
 
-  if (wallet.availableBalanceKES < Number(amountKes)) {
+  const currentAvailable = parseFloat(wallet.availableBalanceKES ? wallet.availableBalanceKES.toString() : '0');
+  if (currentAvailable < parseFloat(amountKes)) {
     throw new Error("Insufficient available balance to lock");
   }
 
   // Deduct from available buckets (enforcing subscription priorities)
   deductFromFundingSources(wallet, amountKes, true);
 
-  wallet.availableBalanceKES = Number((wallet.availableBalanceKES - Number(amountKes)).toFixed(2));
-  wallet.lockedBalanceKES = Number((wallet.lockedBalanceKES + Number(amountKes)).toFixed(2));
+  wallet.availableBalanceKES = mongoose.Types.Decimal128.fromString((currentAvailable - parseFloat(amountKes)).toFixed(2));
+  const currentLocked = parseFloat(wallet.lockedBalanceKES ? wallet.lockedBalanceKES.toString() : '0');
+  wallet.lockedBalanceKES = mongoose.Types.Decimal128.fromString((currentLocked + parseFloat(amountKes)).toFixed(2));
 
   await wallet.save(session ? { session } : {});
   return wallet;
@@ -263,21 +298,24 @@ async function lockFunds(userId, amountKes, session = null) {
 async function unlockFunds(userId, amountKes, session = null) {
   const wallet = await getOrCreateWallet(userId, 'student', session);
 
-  if (wallet.lockedBalanceKES < Number(amountKes)) {
+  const currentLocked = parseFloat(wallet.lockedBalanceKES ? wallet.lockedBalanceKES.toString() : '0');
+  if (currentLocked < parseFloat(amountKes)) {
     throw new Error("Insufficient locked balance to unlock");
   }
 
-  wallet.lockedBalanceKES = Number((wallet.lockedBalanceKES - Number(amountKes)).toFixed(2));
-  wallet.availableBalanceKES = Number((wallet.availableBalanceKES + Number(amountKes)).toFixed(2));
+  wallet.lockedBalanceKES = mongoose.Types.Decimal128.fromString((currentLocked - parseFloat(amountKes)).toFixed(2));
+  const currentAvailable = parseFloat(wallet.availableBalanceKES ? wallet.availableBalanceKES.toString() : '0');
+  wallet.availableBalanceKES = mongoose.Types.Decimal128.fromString((currentAvailable + parseFloat(amountKes)).toFixed(2));
 
   // Restore as self-funded balance when unlocking
   let selfSource = wallet.walletFundingSources.find(s => s.sourceType === 'self');
   if (selfSource) {
-    selfSource.amountKES = Number((selfSource.amountKES + Number(amountKes)).toFixed(2));
+    const currentSelfAmt = parseFloat(selfSource.amountKES ? selfSource.amountKES.toString() : '0');
+    selfSource.amountKES = mongoose.Types.Decimal128.fromString((currentSelfAmt + parseFloat(amountKes)).toFixed(2));
   } else {
     wallet.walletFundingSources.push({
       sourceType: 'self',
-      amountKES: Number(amountKes),
+      amountKES: mongoose.Types.Decimal128.fromString(parseFloat(amountKes).toFixed(2)),
       restrictedUsage: false,
       restrictedUsageType: 'none',
       nutritionCategory: [],
@@ -297,11 +335,12 @@ async function unlockFunds(userId, amountKes, session = null) {
 async function refundFunds(userId, amountKes, category, sourceType = 'self', session = null) {
   const wallet = await getOrCreateWallet(userId, 'student', session);
 
-  let amount = Number(amountKes);
+  let amount = parseFloat(amountKes);
 
+  const currentLocked = parseFloat(wallet.lockedBalanceKES ? wallet.lockedBalanceKES.toString() : '0');
   // Cap refund amount to the actual remaining locked balance
-  if (wallet.lockedBalanceKES < amount) {
-    throw new Error(`Refund amount KES ${amount} exceeds lockedBalanceKES KES ${wallet.lockedBalanceKES}`);
+  if (currentLocked < amount) {
+    throw new Error(`Refund amount KES ${amount} exceeds lockedBalanceKES KES ${currentLocked}`);
   }
 
   if (amount <= 0) {
@@ -310,9 +349,11 @@ async function refundFunds(userId, amountKes, category, sourceType = 'self', ses
   }
 
   // Move from locked → available (net tokenBalanceNT stays the same)
-  wallet.lockedBalanceKES = Number((wallet.lockedBalanceKES - amount).toFixed(2));
-  wallet.availableBalanceKES = Number((wallet.availableBalanceKES + amount).toFixed(2));
-  wallet.totalRefundedKES = Number((wallet.totalRefundedKES + amount).toFixed(2));
+  wallet.lockedBalanceKES = mongoose.Types.Decimal128.fromString((currentLocked - amount).toFixed(2));
+  const currentAvailable = parseFloat(wallet.availableBalanceKES ? wallet.availableBalanceKES.toString() : '0');
+  wallet.availableBalanceKES = mongoose.Types.Decimal128.fromString((currentAvailable + amount).toFixed(2));
+  const currentRefunded = parseFloat(wallet.totalRefundedKES ? wallet.totalRefundedKES.toString() : '0');
+  wallet.totalRefundedKES = mongoose.Types.Decimal128.fromString((currentRefunded + amount).toFixed(2));
 
   // Add back to designated funding sources bucket
   let existingSource = wallet.walletFundingSources.find(
@@ -320,11 +361,12 @@ async function refundFunds(userId, amountKes, category, sourceType = 'self', ses
   );
 
   if (existingSource) {
-    existingSource.amountKES = Number((existingSource.amountKES + amount).toFixed(2));
+    const currentSourceAmt = parseFloat(existingSource.amountKES ? existingSource.amountKES.toString() : '0');
+    existingSource.amountKES = mongoose.Types.Decimal128.fromString((currentSourceAmt + amount).toFixed(2));
   } else {
     wallet.walletFundingSources.push({
       sourceType,
-      amountKES: amount,
+      amountKES: mongoose.Types.Decimal128.fromString(amount.toFixed(2)),
       restrictedUsage: false,
       restrictedUsageType: 'none',
       nutritionCategory: [],
@@ -345,7 +387,7 @@ async function refundFunds(userId, amountKes, category, sourceType = 'self', ses
  */
 async function getSpendableBalance(userId, role = 'student', session = null) {
   const wallet = await getOrCreateWallet(userId, role, session);
-  return wallet.availableBalanceKES;
+  return parseFloat(wallet.availableBalanceKES ? wallet.availableBalanceKES.toString() : '0');
 }
 
 /**
@@ -427,11 +469,14 @@ async function processWalletCustomOrder(userId, vendorUserId, items, totalCost, 
 
   // Credit admin wallet for the commission
   const Wallet = require('../models/Wallet');
-  await Wallet.updateOne(
-    { walletType: 'admin' },
-    { $inc: { availableBalanceKES: Number(commission.toFixed(2)) } },
-    session ? { session } : {}
-  );
+  const adminWallet = session
+    ? await Wallet.findOne({ walletType: 'admin' }).session(session)
+    : await Wallet.findOne({ walletType: 'admin' });
+  if (adminWallet) {
+    const currentAdminAvail = parseFloat(adminWallet.availableBalanceKES ? adminWallet.availableBalanceKES.toString() : '0');
+    adminWallet.availableBalanceKES = mongoose.Types.Decimal128.fromString((currentAdminAvail + parseFloat(commission)).toFixed(2));
+    await adminWallet.save(session ? { session } : {});
+  }
 
   return { debitResult, creditResult, vendorShare, commission };
 }
@@ -492,11 +537,14 @@ async function processMpesaDirectCustomOrder(checkoutRequestID, amountPaid, mpes
 
   // Credit admin wallet for the commission
   const Wallet = require('../models/Wallet');
-  await Wallet.updateOne(
-    { walletType: 'admin' },
-    { $inc: { availableBalanceKES: Number(commission.toFixed(2)) } },
-    session ? { session } : {}
-  );
+  const adminWallet = session
+    ? await Wallet.findOne({ walletType: 'admin' }).session(session)
+    : await Wallet.findOne({ walletType: 'admin' });
+  if (adminWallet) {
+    const currentAdminAvail = parseFloat(adminWallet.availableBalanceKES ? adminWallet.availableBalanceKES.toString() : '0');
+    adminWallet.availableBalanceKES = mongoose.Types.Decimal128.fromString((currentAdminAvail + parseFloat(commission)).toFixed(2));
+    await adminWallet.save(session ? { session } : {});
+  }
 
   // 6. Create custom order transaction log representing the user's direct payment
   await Transaction.create([{
@@ -603,12 +651,11 @@ async function refundCustomOrder(orderId, session = null) {
       false,
       'none',
       session
-    );
-
-    // 2. Deduct vendor share
+    );    // 2. Deduct vendor share
     if (vendorProfile) {
       const vendorWallet = await getOrCreateWallet(vendorProfile.user, 'vendor', session);
-      vendorWallet.availableBalanceKES = Number((vendorWallet.availableBalanceKES - vendorShare).toFixed(2));
+      const currentVendorAvail = parseFloat(vendorWallet.availableBalanceKES ? vendorWallet.availableBalanceKES.toString() : '0');
+      vendorWallet.availableBalanceKES = mongoose.Types.Decimal128.fromString((currentVendorAvail - vendorShare).toFixed(2));
       
       // Deduct from vendor available funding sources
       try {
@@ -644,11 +691,12 @@ async function refundCustomOrder(orderId, session = null) {
       settlementStatus: 'pending',
       description: `M-Pesa refund of custom order ${order.orderId} to original source`
     }], session ? { session } : {});
-
+ 
     // Deduct vendor share
     if (vendorProfile) {
       const vendorWallet = await getOrCreateWallet(vendorProfile.user, 'vendor', session);
-      vendorWallet.availableBalanceKES = Number((vendorWallet.availableBalanceKES - vendorShare).toFixed(2));
+      const currentVendorAvail = parseFloat(vendorWallet.availableBalanceKES ? vendorWallet.availableBalanceKES.toString() : '0');
+      vendorWallet.availableBalanceKES = mongoose.Types.Decimal128.fromString((currentVendorAvail - vendorShare).toFixed(2));
       
       try {
         deductFromFundingSources(vendorWallet, vendorShare, false);
@@ -657,7 +705,7 @@ async function refundCustomOrder(orderId, session = null) {
       }
       
       await vendorWallet.save(session ? { session } : {});
-
+ 
       await Transaction.create([{
         transactionId: crypto.randomUUID(),
         fromUser: vendorProfile.user,

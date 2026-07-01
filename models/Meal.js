@@ -24,7 +24,7 @@ const MealSchema = new mongoose.Schema(
     category: { type: String, required: true, enum: ["main", "drink", "fruit"] },
     description: { type: String, default: "" },
     imageUrl: { type: String, default: "" },
-    price: { type: Number, required: true, min: 0 },
+    price: { type: mongoose.Schema.Types.Decimal128, required: true, min: 0 },
     currency: { type: String, default: "KES" },
     nutrition: { type: NutritionSchema, default: () => ({}) },
     isActive: { type: Boolean, default: true },

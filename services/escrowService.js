@@ -1,3 +1,4 @@
+const mongoose = require('mongoose');
 const Wallet = require('../models/Wallet');
 const Transaction = require('../models/Transaction');
 const Delivery = require('../models/Delivery');
@@ -38,11 +39,12 @@ async function lockSubscriptionFunds(studentId, amountKes, sponsorId = null, ses
 
   // Create subscription lock transaction for user & admin audit trail
   const txOpts = session ? { session } : {};
+  const txId = crypto.randomUUID();
   const lockTx = await Transaction.create([{
-    transactionId: crypto.randomUUID(),
+    transactionId: txId,
     fromUser: studentId,
     toUser: null,
-    amountKES: Number(amountKes),
+    amountKES: mongoose.Types.Decimal128.fromString(parseFloat(amountKes).toFixed(2)),
     transactionCategory: 'subscription_lock',
     paymentMethod: 'wallet',
     paymentSource: sponsorId ? 'sponsor_funds' : 'student_wallet',
@@ -52,6 +54,21 @@ async function lockSubscriptionFunds(studentId, amountKes, sponsorId = null, ses
     settlementStatus: settlementStatus,
     description: 'Meal Plan Subscription Processed'
   }], txOpts);
+
+  // Ledger log for escrow lock
+  try {
+    const ledgerService = require('./ledgerService');
+    await ledgerService.recordLedgerEntry({
+      debitWallet: studentWallet._id,
+      creditWallet: null,
+      amountKES: mongoose.Types.Decimal128.fromString(parseFloat(amountKes).toFixed(2)),
+      transactionId: txId,
+      reference: 'Meal Plan Subscription Escrow Lock',
+      ledgerType: 'escrow_lock'
+    }, session);
+  } catch (ledgerErr) {
+    console.error("Ledger log failed in lockSubscriptionFunds:", ledgerErr.message);
+  }
 
   return { studentWallet, transaction: lockTx[0] };
 }
@@ -64,7 +81,9 @@ async function releaseDailyVendorPayment(deliveryId, session = null) {
     ? await Delivery.findById(deliveryId).session(session)
     : await Delivery.findById(deliveryId);
   if (!delivery) throw new Error("Delivery not found");
-  if (delivery.status === 'delivered') return { alreadyReleased: true };
+  
+  // Reconciliation lock: check paymentReleased flag
+  if (delivery.paymentReleased) return { alreadyReleased: true };
 
   const totalCost = Number(delivery.totalCost || 0);
   if (totalCost <= 0) return { freeOrder: true };
@@ -88,16 +107,19 @@ async function releaseDailyVendorPayment(deliveryId, session = null) {
   const studentWallet = session
     ? await Wallet.findOne({ user: delivery.student }).session(session)
     : await Wallet.findOne({ user: delivery.student });
-  if (!studentWallet || studentWallet.lockedBalanceKES < totalCost) {
+  if (!studentWallet) {
+    throw new Error(`Student wallet not found for user ${delivery.student}`);
+  }
+
+  const currentLocked = parseFloat(studentWallet.lockedBalanceKES ? studentWallet.lockedBalanceKES.toString() : '0');
+  if (currentLocked < totalCost) {
     throw new Error(`Student locked balance is insufficient to cover delivery cost of ${totalCost}`);
   }
 
-  studentWallet.lockedBalanceKES = Number((studentWallet.lockedBalanceKES - totalCost).toFixed(2));
+  studentWallet.lockedBalanceKES = mongoose.Types.Decimal128.fromString((currentLocked - totalCost).toFixed(2));
   await studentWallet.save(session ? { session } : {});
 
   // 2. Credit Vendor wallet available balance and funding sources
-  // skipTxLog=true: escrowService already creates its own Transaction below (escrow_release).
-  // Passing false here would create a duplicate 'vendor_payout' transaction for the same payout.
   const vendorWallet = await walletService.creditWallet(
     vendorProfile.user,
     vendorShare,
@@ -149,11 +171,14 @@ async function releaseDailyVendorPayment(deliveryId, session = null) {
 
   // 4. Log Transactions in MongoDB
   const txOpts = session ? { session } : {};
+  const vendorTxId = crypto.randomUUID();
+  const commissionTxId = crypto.randomUUID();
+
   const vendorTx = await Transaction.create([{
-    transactionId: crypto.randomUUID(),
+    transactionId: vendorTxId,
     fromUser: delivery.student,
     toUser: vendorProfile.user,
-    amountKES: vendorShare,
+    amountKES: mongoose.Types.Decimal128.fromString(vendorShare.toFixed(2)),
     transactionCategory: 'escrow_release',
     paymentMethod: 'stellar',
     orderType: 'subscription',
@@ -164,10 +189,10 @@ async function releaseDailyVendorPayment(deliveryId, session = null) {
   }], txOpts);
 
   const commissionTx = await Transaction.create([{
-    transactionId: crypto.randomUUID(),
+    transactionId: commissionTxId,
     fromUser: vendorProfile.user, // Vendor pays commission!
     toUser: null, // to Platform/System
-    amountKES: commission,
+    amountKES: mongoose.Types.Decimal128.fromString(commission.toFixed(2)),
     transactionCategory: 'commission',
     paymentMethod: 'stellar',
     orderType: 'subscription',
@@ -178,12 +203,42 @@ async function releaseDailyVendorPayment(deliveryId, session = null) {
   }], txOpts);
 
   // Credit admin wallet for the commission
-  const Wallet = require('../models/Wallet');
-  await Wallet.updateOne(
-    { walletType: 'admin' },
-    { $inc: { availableBalanceKES: Number(commission.toFixed(2)) } },
-    txOpts
-  );
+  const adminWallet = session
+    ? await Wallet.findOne({ walletType: 'admin' }).session(session)
+    : await Wallet.findOne({ walletType: 'admin' });
+  if (adminWallet) {
+    const currentAdminAvail = parseFloat(adminWallet.availableBalanceKES ? adminWallet.availableBalanceKES.toString() : '0');
+    adminWallet.availableBalanceKES = mongoose.Types.Decimal128.fromString((currentAdminAvail + parseFloat(commission)).toFixed(2));
+    await adminWallet.save(session ? { session } : {});
+  }
+
+  // Double-entry ledger logs
+  try {
+    const ledgerService = require('./ledgerService');
+    await ledgerService.recordLedgerEntry({
+      debitWallet: studentWallet._id,
+      creditWallet: vendorWallet.wallet._id,
+      amountKES: mongoose.Types.Decimal128.fromString(vendorShare.toFixed(2)),
+      transactionId: vendorTxId,
+      reference: `Daily subscription payout release for delivery ${deliveryId}`,
+      ledgerType: 'escrow_release'
+    }, session);
+
+    await ledgerService.recordLedgerEntry({
+      debitWallet: vendorWallet.wallet._id,
+      creditWallet: adminWallet ? adminWallet._id : null,
+      amountKES: mongoose.Types.Decimal128.fromString(commission.toFixed(2)),
+      transactionId: commissionTxId,
+      reference: `Platform commission for delivery ${deliveryId}`,
+      ledgerType: 'commission'
+    }, session);
+  } catch (ledgerErr) {
+    console.error("Ledger logging failed in releaseDailyVendorPayment:", ledgerErr.message);
+  }
+
+  // Reconciliation lock: set paymentReleased to true
+  delivery.paymentReleased = true;
+  await delivery.save(session ? { session } : {});
 
   return { studentWallet, vendorWallet: vendorWallet.wallet, transactions: [vendorTx[0], commissionTx[0]] };
 }
@@ -429,13 +484,21 @@ async function chargeMealPriceDifference(delivery, newPrice, session = null) {
   const studentWallet = session
     ? await Wallet.findOne({ user: studentId }).session(session)
     : await Wallet.findOne({ user: studentId });
-  if (!studentWallet || studentWallet.availableBalanceKES < diff) {
+  if (!studentWallet) {
+    throw new Error("Student wallet not found.");
+  }
+
+  const mongoose = require('mongoose');
+  const studentAvail = parseFloat(studentWallet.availableBalanceKES ? studentWallet.availableBalanceKES.toString() : '0');
+  const studentLocked = parseFloat(studentWallet.lockedBalanceKES ? studentWallet.lockedBalanceKES.toString() : '0');
+
+  if (studentAvail < diff) {
     throw new Error(`Insufficient student wallet available balance. You need KES ${diff} to cover the price difference.`);
   }
 
   // Deduct from available balance and credit locked balance
-  studentWallet.availableBalanceKES = Number((studentWallet.availableBalanceKES - diff).toFixed(2));
-  studentWallet.lockedBalanceKES = Number((studentWallet.lockedBalanceKES + diff).toFixed(2));
+  studentWallet.availableBalanceKES = mongoose.Types.Decimal128.fromString((studentAvail - diff).toFixed(2));
+  studentWallet.lockedBalanceKES = mongoose.Types.Decimal128.fromString((studentLocked + diff).toFixed(2));
   await studentWallet.save(session ? { session } : {});
 
   // Stellar settlement: Escrow -> Treasury (lock additional funds on-chain using NT token)

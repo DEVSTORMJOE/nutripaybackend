@@ -10,7 +10,7 @@ async function checkPendingStudentWithdrawals() {
 
     // Find all pending withdrawal requests that are older than 7 days and notification has not been sent yet
     const pendingRequests = await WithdrawalRequest.find({
-      status: 'pending_approval',
+      status: 'requested',
       notificationSent: { $ne: true },
       createdAt: { $lte: holdPeriodLimit }
     }).populate('user');

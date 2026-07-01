@@ -7,7 +7,7 @@ const refundRequestSchema = new mongoose.Schema({
     required: true
   },
   amountKES: {
-    type: Number,
+    type: mongoose.Schema.Types.Decimal128,
     required: true
   },
   status: {

@@ -7,8 +7,8 @@ const fundingSourceSchema = new mongoose.Schema({
     default: 'self'
   },
   amountKES: {
-    type: Number,
-    default: 0
+    type: mongoose.Schema.Types.Decimal128,
+    default: "0.00"
   },
   restrictedUsage: {
     type: Boolean,
@@ -41,36 +41,36 @@ const walletSchema = new mongoose.Schema({
     required: true
   },
   availableBalanceKES: {
-    type: Number,
-    default: 0
+    type: mongoose.Schema.Types.Decimal128,
+    default: "0.00"
   },
   lockedBalanceKES: {
-    type: Number,
-    default: 0
+    type: mongoose.Schema.Types.Decimal128,
+    default: "0.00"
   },
   tokenBalanceNT: {
-    type: Number,
-    default: 0
+    type: mongoose.Schema.Types.Decimal128,
+    default: "0.00"
   },
   pendingWithdrawalKES: {
-    type: Number,
-    default: 0
+    type: mongoose.Schema.Types.Decimal128,
+    default: "0.00"
   },
   totalDepositedKES: {
-    type: Number,
-    default: 0
+    type: mongoose.Schema.Types.Decimal128,
+    default: "0.00"
   },
   totalSpentKES: {
-    type: Number,
-    default: 0
+    type: mongoose.Schema.Types.Decimal128,
+    default: "0.00"
   },
   totalWithdrawnKES: {
-    type: Number,
-    default: 0
+    type: mongoose.Schema.Types.Decimal128,
+    default: "0.00"
   },
   totalRefundedKES: {
-    type: Number,
-    default: 0
+    type: mongoose.Schema.Types.Decimal128,
+    default: "0.00"
   },
   status: {
     type: String,
@@ -85,7 +85,9 @@ const walletSchema = new mongoose.Schema({
 
 // Pre-save hook to keep tokenBalanceNT in sync
 walletSchema.pre('save', function(next) {
-  this.tokenBalanceNT = Number((this.availableBalanceKES + this.lockedBalanceKES).toFixed(2));
+  const avail = parseFloat(this.availableBalanceKES ? this.availableBalanceKES.toString() : '0');
+  const lock = parseFloat(this.lockedBalanceKES ? this.lockedBalanceKES.toString() : '0');
+  this.tokenBalanceNT = mongoose.Types.Decimal128.fromString((avail + lock).toFixed(2));
   next();
 });
 

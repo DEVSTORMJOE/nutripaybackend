@@ -7,7 +7,7 @@ const nDashProductSchema = new mongoose.Schema({
     trim: true
   },
   priceKES: {
-    type: Number,
+    type: mongoose.Schema.Types.Decimal128,
     required: true
   },
   imageUrl: {

@@ -2,52 +2,52 @@ const mongoose = require('mongoose');
 
 const reserveSnapshotSchema = new mongoose.Schema({
   treasuryNT: {
-    type: Number,
+    type: mongoose.Schema.Types.Decimal128,
     required: true
   },
   escrowNT: {
-    type: Number,
+    type: mongoose.Schema.Types.Decimal128,
     required: true
   },
   vendorSettlementNT: {
-    type: Number,
+    type: mongoose.Schema.Types.Decimal128,
     required: true
   },
   revenueNT: {
-    type: Number,
+    type: mongoose.Schema.Types.Decimal128,
     required: true
   },
   mongodbAvailableKES: {
-    type: Number,
+    type: mongoose.Schema.Types.Decimal128,
     required: true
   },
   mongodbLockedKES: {
-    type: Number,
+    type: mongoose.Schema.Types.Decimal128,
     required: true
   },
   mongodbVendorSettlementKES: {
-    type: Number,
+    type: mongoose.Schema.Types.Decimal128,
     required: true
   },
   mongodbRevenueKES: {
-    type: Number,
+    type: mongoose.Schema.Types.Decimal128,
     required: true
   },
   discrepancyTreasury: {
-    type: Number,
-    default: 0
+    type: mongoose.Schema.Types.Decimal128,
+    default: "0.00"
   },
   discrepancyEscrow: {
-    type: Number,
-    default: 0
+    type: mongoose.Schema.Types.Decimal128,
+    default: "0.00"
   },
   discrepancyVendor: {
-    type: Number,
-    default: 0
+    type: mongoose.Schema.Types.Decimal128,
+    default: "0.00"
   },
   discrepancyRevenue: {
-    type: Number,
-    default: 0
+    type: mongoose.Schema.Types.Decimal128,
+    default: "0.00"
   },
   status: {
     type: String,

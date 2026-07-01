@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { getDashboard, approveMeal, getUsers, getPendingApprovals, approveVendor, getVendors, getWallets, getTransactions, createUser, updateUser, createVendor, getMeals, updateMealApproval, getOrders, getDeliveryStaff, approveDelivery, getWeeklyPlans, updateWeeklyPlan, getWithdrawalRequests, handleWithdrawalRequest, assignLocationsToDriver, getRefundRequests, handleRefundApproval, getErrorLogs, resolveErrorLog } = require('../controllers/adminController');
+const { getDashboard, approveMeal, getUsers, getPendingApprovals, approveVendor, getVendors, getWallets, updateWalletStatus, getTransactions, createUser, updateUser, createVendor, getMeals, updateMealApproval, getOrders, assignDriverToOrder, getDeliveryStaff, approveDelivery, getWeeklyPlans, updateWeeklyPlan, getWithdrawalRequests, handleWithdrawalRequest, assignLocationsToDriver, getRefundRequests, handleRefundApproval, getErrorLogs, resolveErrorLog } = require('../controllers/adminController');
 const { protect } = require('../middleware/authMiddleware');
 const { role } = require('../middleware/roleMiddleware');
 
@@ -11,6 +11,7 @@ router.put('/users/:id', protect, role('admin'), updateUser);
 router.get('/vendors', protect, role('admin'), getVendors);
 router.post('/vendors', protect, role('admin'), createVendor);
 router.get('/wallets', protect, role('admin'), getWallets);
+router.post('/wallets/:id/status', protect, role('admin'), updateWalletStatus);
 router.get('/transactions', protect, role('admin'), getTransactions);
 router.get('/pending', protect, role('admin'), getPendingApprovals);
 router.post('/approve/meal', protect, role('admin'), approveMeal);
@@ -18,6 +19,7 @@ router.post('/approve/vendor', protect, role('admin'), approveVendor);
 router.get('/meals', protect, role('admin'), getMeals);
 router.patch('/meals/:id/approval', protect, role('admin'), updateMealApproval);
 router.get('/orders', protect, role('admin'), getOrders);
+router.post('/orders/:id/assign-driver', protect, role('admin'), assignDriverToOrder);
 router.get('/delivery-staff', protect, role('admin'), getDeliveryStaff);
 router.post('/approve/delivery', protect, role('admin'), approveDelivery);
 router.get('/weekly-plans', protect, role('admin'), getWeeklyPlans);
@@ -52,6 +54,74 @@ router.get('/reconciliation', protect, role('admin'), async (req, res) => {
   } catch (err) {
     console.error('Reconciliation report error:', err);
     res.status(500).json({ message: 'Reconciliation failed: ' + err.message });
+  }
+});
+
+// Stellar Security Hardening Endpoints
+router.get('/stellar-security/status', protect, role('admin'), async (req, res) => {
+  try {
+    const stellarSecurityService = require('../services/stellarSecurityService');
+    const status = await stellarSecurityService.getSecurityStatus();
+    res.json(status);
+  } catch (err) {
+    res.status(500).json({ message: "Failed to fetch security status: " + err.message });
+  }
+});
+
+router.post('/stellar-security/configure-flags', protect, role('admin'), async (req, res) => {
+  try {
+    const stellarSecurityService = require('../services/stellarSecurityService');
+    const result = await stellarSecurityService.configureIssuerFlags();
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ message: "Failed to configure issuer flags: " + err.message });
+  }
+});
+
+router.post('/stellar-security/bootstrap', protect, role('admin'), async (req, res) => {
+  try {
+    const stellarSecurityService = require('../services/stellarSecurityService');
+    const results = await stellarSecurityService.bootstrapPlatformTrustlines();
+    res.json({ message: "Platform trustlines bootstrapped successfully", results });
+  } catch (err) {
+    res.status(500).json({ message: "Failed to bootstrap platform trustlines: " + err.message });
+  }
+});
+
+router.post('/stellar-security/approve', protect, role('admin'), async (req, res) => {
+  const { publicKey } = req.body;
+  if (!publicKey) return res.status(400).json({ message: "publicKey is required" });
+  try {
+    const stellarSecurityService = require('../services/stellarSecurityService');
+    const txHash = await stellarSecurityService.approveTrustline(publicKey);
+    res.json({ message: "Trustline approved successfully", txHash });
+  } catch (err) {
+    res.status(500).json({ message: "Failed to approve trustline: " + err.message });
+  }
+});
+
+router.post('/stellar-security/revoke', protect, role('admin'), async (req, res) => {
+  const { publicKey } = req.body;
+  if (!publicKey) return res.status(400).json({ message: "publicKey is required" });
+  try {
+    const stellarSecurityService = require('../services/stellarSecurityService');
+    const txHash = await stellarSecurityService.revokeTrustline(publicKey);
+    
+    // Log permanent AuditLog for emergency revocation
+    const AuditLog = require('../models/AuditLog');
+    await AuditLog.create({
+      action: 'manual_adjustment',
+      user: req.user.id,
+      details: {
+        action: 'stellar_trustline_revocation',
+        revokedPublicKey: publicKey,
+        txHash
+      }
+    });
+
+    res.json({ message: "Trustline revoked successfully", txHash });
+  } catch (err) {
+    res.status(500).json({ message: "Failed to revoke trustline: " + err.message });
   }
 });
 

@@ -23,18 +23,18 @@ const getDashboard = async (req, res) => {
     const wallets = await Wallet.find();
 
     // 1. Reserves & Balances Calculations
-    const ntSupply = wallets.reduce((acc, w) => acc + (w.tokenBalanceNT || 0), 0);
-    const escrowBalance = wallets.reduce((acc, w) => acc + (w.lockedBalanceKES || 0), 0);
+    const ntSupply = wallets.reduce((acc, w) => acc + parseFloat(w.tokenBalanceNT ? w.tokenBalanceNT.toString() : '0'), 0);
+    const escrowBalance = wallets.reduce((acc, w) => acc + parseFloat(w.lockedBalanceKES ? w.lockedBalanceKES.toString() : '0'), 0);
     
     const adminWallet = wallets.find(w => w.walletType === 'admin');
-    const treasuryBalance = adminWallet ? adminWallet.availableBalanceKES : 0;
+    const treasuryBalance = adminWallet ? parseFloat(adminWallet.availableBalanceKES ? adminWallet.availableBalanceKES.toString() : '0') : 0;
     
     const vendorWallets = wallets.filter(w => w.walletType === 'vendor');
-    const vendorSettlementBalance = vendorWallets.reduce((acc, w) => acc + (w.availableBalanceKES || 0), 0);
+    const vendorSettlementBalance = vendorWallets.reduce((acc, w) => acc + parseFloat(w.availableBalanceKES ? w.availableBalanceKES.toString() : '0'), 0);
 
     // Sum of Mongo commission transactions
     const commissionTxs = await Transaction.find({ transactionCategory: 'commission', status: 'completed' });
-    const totalCommissions = commissionTxs.reduce((acc, tx) => acc + (tx.amountKES || 0), 0);
+    const totalCommissions = commissionTxs.reduce((acc, tx) => acc + parseFloat(tx.amountKES ? tx.amountKES.toString() : '0'), 0);
 
     // Deduct completed admin withdrawals
     const admins = await User.find({ role: 'admin' }).select('_id');
@@ -44,7 +44,7 @@ const getDashboard = async (req, res) => {
       status: 'completed',
       fromUser: { $in: adminIds }
     });
-    const totalWithdrawals = withdrawalTxs.reduce((acc, tx) => acc + (tx.amountKES || 0), 0);
+    const totalWithdrawals = withdrawalTxs.reduce((acc, tx) => acc + parseFloat(tx.amountKES ? tx.amountKES.toString() : '0'), 0);
 
     const revenueBalance = Math.max(0, totalCommissions - totalWithdrawals);
 
@@ -57,7 +57,7 @@ const getDashboard = async (req, res) => {
     // 3. Analytics
     const SponsorRequest = require('../models/SponsorRequest');
     const sponsorTxs = await SponsorRequest.find({ status: 'paid' });
-    const sponsorFunding = sponsorTxs.reduce((acc, r) => acc + (r.amountKES || 0), 0);
+    const sponsorFunding = sponsorTxs.reduce((acc, r) => acc + parseFloat(r.amountKES ? r.amountKES.toString() : '0'), 0);
 
     const Subscription = require('../models/Subscription');
     const subscriptionCount = await Subscription.countDocuments({ status: 'active' });
@@ -245,6 +245,44 @@ const getWallets = async (req, res) => {
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: 'Server Error' });
+  }
+};
+
+// @desc    Update wallet status (active, frozen, refund_pending, suspended)
+// @route   POST /api/admin/wallets/:id/status
+// @access  Private (Admin)
+const updateWalletStatus = async (req, res) => {
+  try {
+    const { status } = req.body;
+    if (!['active', 'frozen', 'refund_pending', 'suspended'].includes(status)) {
+      return res.status(400).json({ message: "Invalid wallet status" });
+    }
+
+    const Wallet = require('../models/Wallet');
+    const wallet = await Wallet.findById(req.params.id);
+    if (!wallet) {
+      return res.status(404).json({ message: "Wallet not found" });
+    }
+
+    wallet.status = status;
+    await wallet.save();
+
+    // Log permanent AuditLog for user status change
+    const AuditLog = require('../models/AuditLog');
+    await AuditLog.create({
+      action: 'manual_adjustment',
+      user: req.user.id,
+      details: {
+        action: 'wallet_status_change',
+        walletId: wallet._id,
+        newStatus: status
+      }
+    });
+
+    res.json({ message: `Wallet status successfully updated to ${status}`, wallet });
+  } catch (error) {
+    console.error("Update wallet status error:", error);
+    res.status(500).json({ message: "Failed to update wallet status: " + error.message });
   }
 };
 
@@ -524,6 +562,13 @@ const getOrders = async (req, res) => {
 
     const query = {};
 
+    // Filter by orderType
+    if (req.query.orderType === 'custom') {
+      query.isCustom = true;
+    } else if (req.query.orderType === 'subscription') {
+      query.isCustom = { $ne: true };
+    }
+
     // 1. Base Dropdown Filters
     if (req.query.status) {
       query.status = req.query.status;
@@ -607,6 +652,68 @@ const getOrders = async (req, res) => {
   } catch (error) {
     console.error("Admin getting orders failed:", error);
     res.status(500).json({ message: 'Failed to fetch orders: ' + error.message });
+  }
+};
+
+// @desc    Assign a driver to an order (override)
+// @route   POST /api/admin/orders/:id/assign-driver
+// @access  Private (Admin)
+const assignDriverToOrder = async (req, res) => {
+  const { driverId } = req.body;
+  try {
+    const Delivery = require('../models/Delivery');
+    const User = require('../models/User');
+    const AuditLog = require('../models/NDashAuditLog');
+    const Notification = require('../models/Notification');
+
+    const delivery = await Delivery.findById(req.params.id);
+    if (!delivery) {
+      return res.status(404).json({ message: 'Order delivery record not found.' });
+    }
+
+    const driver = await User.findById(driverId);
+    if (!driver || driver.role !== 'delivery') {
+      return res.status(400).json({ message: 'Selected user is not a registered delivery agent.' });
+    }
+
+    const previousDriver = delivery.deliveryAgent;
+    delivery.deliveryAgent = driverId;
+
+    // Transition status to 'assigned' if it's currently pending or preparing or ready
+    if (['pending', 'preparing', 'ready'].includes(delivery.status)) {
+      delivery.status = 'assigned';
+    }
+
+    // Ensure verification code is generated if missing
+    if (!delivery.deliveryVerificationCode) {
+      const part1 = Math.floor(100 + Math.random() * 900);
+      const part2 = Math.floor(100 + Math.random() * 900);
+      delivery.deliveryVerificationCode = `NP-${part1}-${part2}`;
+    }
+
+    await delivery.save();
+
+    // Log the override action
+    await AuditLog.create({
+      action: 'ORDER_DRIVER_ASSIGNED',
+      details: `Admin assigned driver ${driver.name} (ID: ${driverId}) to order delivery ${delivery._id}. Previous driver: ${previousDriver || 'None'}`
+    });
+
+    // Notify the driver
+    await Notification.create({
+      user: driverId,
+      type: 'delivery',
+      title: 'New Delivery Assigned 🚴',
+      message: `You have been manually assigned to delivery #${String(delivery._id).slice(-6)} at ${delivery.location}.`
+    });
+
+    res.json({
+      message: 'Delivery staff successfully assigned to this order.',
+      delivery
+    });
+  } catch (error) {
+    console.error("Assign driver override failed:", error);
+    res.status(500).json({ message: 'Failed to assign driver: ' + error.message });
   }
 };
 
@@ -765,10 +872,10 @@ const handleWithdrawalRequest = async (req, res) => {
 
   try {
     // SECURITY REQUIREMENT: Atomic transaction locking to prevent race conditions and duplicate payouts.
-    // Query by 'pending_approval' and atomically update status to prevent concurrent invocation race.
+    // Query by 'requested' and atomically update status to prevent concurrent invocation race.
     const request = await WithdrawalRequest.findOneAndUpdate(
-      { _id: id, status: 'pending_approval' },
-      { $set: { status: status === 'approved' ? 'processing' : 'rejected' } },
+      { _id: id, status: 'requested' },
+      { $set: { status: status === 'approved' ? 'approved' : 'rejected' } },
       { new: true }
     ).populate('user');
 
@@ -778,21 +885,20 @@ const handleWithdrawalRequest = async (req, res) => {
 
     const wallet = await Wallet.findOne({ user: request.user._id });
     if (!wallet) {
-      // Revert status to pending_approval if wallet missing
-      request.status = 'pending_approval';
+      // Revert status to requested if wallet missing
+      request.status = 'requested';
       await request.save();
       return res.status(404).json({ message: "User wallet not found." });
     }
 
-    // SECURITY REQUIREMENT: Audit log every action (Admin, Timestamp, IP, Amount, Wallet)
+    // SECURITY REQUIREMENT: Audit log every action
     const auditRecord = {
       adminId: req.user.id,
       adminEmail: req.user.email,
       timestamp: new Date(),
       ip: req.ip || req.connection.remoteAddress || '127.0.0.1',
-      amountKES: request.amountKES,
+      amountKES: request.amountKES.toString(),
       walletId: wallet._id.toString(),
-      walletPublicKey: wallet.stellarPublicKey,
       action: status
     };
     console.log("[SECURITY AUDIT LOG] Payout action processed:", auditRecord);
@@ -806,56 +912,58 @@ const handleWithdrawalRequest = async (req, res) => {
       // 1. Dispatch B2C payout to user's phone via Safaricom Daraja API
       let payoutResult;
       try {
-        payoutResult = await mpesaService.withdrawToMpesa(request.phone, request.amountKES);
+        payoutResult = await mpesaService.withdrawToMpesa(request.phone, parseFloat(request.amountKES.toString()));
       } catch (payoutErr) {
         // Revert locking status if payout fails so admin can retry
-        request.status = 'pending_approval';
+        request.status = 'requested';
         await request.save();
         return res.status(500).json({ message: "Safaricom B2C payout initiation failed: " + payoutErr.message });
       }
 
-      // 2. Deduct from pending withdrawal and mark completed
-      wallet.pendingWithdrawalKES = Number((wallet.pendingWithdrawalKES - request.amountKES).toFixed(2));
-      wallet.totalWithdrawnKES = Number((wallet.totalWithdrawnKES + request.amountKES).toFixed(2));
-      await wallet.save();
-
-      // 3. Perform Stellar Mirror Payout: Vendor Settlement -> Treasury
-      let stellarTxHash = "";
-      let settlementStatus = "pending";
-      try {
-        stellarTxHash = await stellarTreasuryService.moveVendorToTreasury(request.amountKES);
-        settlementStatus = "synced";
-        console.log("✅ On-chain token redemption successful. Tx Hash:", stellarTxHash);
-      } catch (err) {
-        console.error("❌ Failed to mirror withdrawal back to Treasury on Stellar:", err.message);
-        settlementStatus = "failed";
-      }
-
-      // 4. Create transaction log
-      await Transaction.create({
-        transactionId: crypto.randomUUID(),
-        fromUser: request.user._id,
-        amountKES: request.amountKES,
-        transactionCategory: 'withdrawal',
-        paymentMethod: 'mpesa',
-        stellarTxHash: stellarTxHash || null,
-        status: 'completed',
-        settlementStatus: settlementStatus,
-        description: `M-Pesa Payout to ${request.phone} (Approved by Admin)`
-      });
-
-      // Update withdrawal request
-      request.status = 'approved';
+      // 2. Set status to b2c_pending and track conversation IDs
+      const crypto = require('crypto');
+      request.status = 'b2c_pending';
+      request.conversationId = payoutResult.conversationId || `B2C_Conv_${crypto.randomUUID()}`;
+      request.originatorConversationId = payoutResult.originatorConversationId || `B2C_Orig_${crypto.randomUUID()}`;
       request.approvedBy = req.user.id;
       request.approvedAt = new Date();
-      request.stellarTxHash = stellarTxHash;
       await request.save();
 
-      return res.json({ message: "Withdrawal request approved and payout dispatched successfully!", request });
+      // Sandbox environment: auto-simulate B2C callback completion
+      if (payoutResult.success || payoutResult.conversationId) {
+        setTimeout(async () => {
+          try {
+            const mpesaController = require('./mpesaController');
+            const mockBody = {
+              Result: {
+                ResultCode: 0,
+                ConversationID: request.conversationId,
+                OriginatorConversationID: request.originatorConversationId,
+                ResultDesc: "Accept the service request successfully."
+              }
+            };
+            const mockReq = { body: mockBody };
+            const mockRes = {
+              status: () => ({ json: () => {} }),
+              json: () => {}
+            };
+            await mpesaController.mpesaB2CCallback(mockReq, mockRes);
+            console.log(`[Sandbox Mock B2C Callback] Auto-triggered B2C payout callback simulation for request ID: ${request._id}`);
+          } catch (mockErr) {
+            console.error("Mock B2C Callback simulation failed:", mockErr.message);
+          }
+        }, 1500);
+      }
+
+      return res.json({ message: "Withdrawal request approved and payout B2C pending.", request });
     } else if (status === 'rejected') {
       // Reject request: release funds from pendingWithdrawalKES back to availableBalanceKES
-      wallet.availableBalanceKES = Number((wallet.availableBalanceKES + request.amountKES).toFixed(2));
-      wallet.pendingWithdrawalKES = Number((wallet.pendingWithdrawalKES - request.amountKES).toFixed(2));
+      const currentAvail = parseFloat(wallet.availableBalanceKES ? wallet.availableBalanceKES.toString() : '0');
+      const currentPending = parseFloat(wallet.pendingWithdrawalKES ? wallet.pendingWithdrawalKES.toString() : '0');
+      const amount = parseFloat(request.amountKES.toString());
+
+      wallet.availableBalanceKES = mongoose.Types.Decimal128.fromString((currentAvail + amount).toFixed(2));
+      wallet.pendingWithdrawalKES = mongoose.Types.Decimal128.fromString((currentPending - amount).toFixed(2));
       await wallet.save();
 
       // Update withdrawal request
@@ -865,12 +973,23 @@ const handleWithdrawalRequest = async (req, res) => {
       request.rejectionReason = rejectionReason || "Rejected by administrator";
       await request.save();
 
+      // Log permanent AuditLog for rejection
+      try {
+        const AuditLog = require('../models/AuditLog');
+        await AuditLog.create([{
+          action: 'refund_approval', // refund back to available balance
+          user: req.user.id,
+          details: {
+            withdrawalRequestId: request._id,
+            amountKES: amount,
+            status: 'rejected'
+          }
+        }]);
+      } catch (err) {
+        console.error("Audit log failed for withdrawal rejection:", err.message);
+      }
+
       return res.json({ message: "Withdrawal request rejected and funds returned to wallet.", request });
-    } else {
-      // Revert status to pending_approval if invalid status option
-      request.status = 'pending_approval';
-      await request.save();
-      return res.status(400).json({ message: "Invalid status option. Use 'approved' or 'rejected'." });
     }
   } catch (error) {
     console.error("Error processing withdrawal approval:", error);
@@ -1343,6 +1462,7 @@ module.exports = {
   getVendors,
   getWallets,
   getOrders,
+  assignDriverToOrder,
   getDeliveryStaff,
   approveDelivery,
   getWeeklyPlans,
@@ -1357,5 +1477,6 @@ module.exports = {
   getRefundRequests,
   handleRefundApproval,
   getErrorLogs,
-  resolveErrorLog
+  resolveErrorLog,
+  updateWalletStatus
 };

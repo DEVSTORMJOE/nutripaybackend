@@ -179,8 +179,24 @@ const protect = async (req, res, next) => {
   }
 };
 
+const checkActiveWallet = async (req, res, next) => {
+  try {
+    const Wallet = require("../models/Wallet");
+    const wallet = await Wallet.findOne({ user: req.user.id });
+    if (wallet && wallet.status !== "active" && wallet.status !== "refund_pending") {
+      return res.status(403).json({
+        message: `Your wallet is currently ${wallet.status}. This operation is disabled.`
+      });
+    }
+    next();
+  } catch (error) {
+    next(error);
+  }
+};
+
 // Export both names so old and new route files both work
 module.exports = {
   protect,
   requireAuth: protect,
+  checkActiveWallet,
 };

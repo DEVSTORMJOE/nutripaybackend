@@ -46,14 +46,16 @@ async function runFullReconciliation() {
     let dbVendorSettlementKES = 0; // Unwithdrawn earnings for vendors
     
     wallets.forEach(w => {
+      const avail = parseFloat(w.availableBalanceKES ? w.availableBalanceKES.toString() : '0');
+      const locked = parseFloat(w.lockedBalanceKES ? w.lockedBalanceKES.toString() : '0');
       if (w.walletType === 'student' || w.walletType === 'sponsor') {
-        dbTreasuryKES += Number(w.availableBalanceKES);
+        dbTreasuryKES += avail;
       }
       if (w.walletType === 'student') {
-        dbEscrowKES += Number(w.lockedBalanceKES);
+        dbEscrowKES += locked;
       }
       if (w.walletType === 'vendor') {
-        dbVendorSettlementKES += Number(w.availableBalanceKES);
+        dbVendorSettlementKES += avail;
       }
     });
 
@@ -63,7 +65,7 @@ async function runFullReconciliation() {
 
     // Calculate Platform Revenue from MongoDB transaction logs (sum category === 'commission')
     const commissionTxs = await Transaction.find({ transactionCategory: 'commission', status: 'completed' });
-    let dbRevenueKES = commissionTxs.reduce((sum, tx) => sum + Number(tx.amountKES), 0);
+    let dbRevenueKES = commissionTxs.reduce((sum, tx) => sum + parseFloat(tx.amountKES ? tx.amountKES.toString() : '0'), 0);
     dbRevenueKES = Number(dbRevenueKES.toFixed(2));
 
     // 2. Query On-Chain NT Token Balances
@@ -129,21 +131,27 @@ module.exports = {
  *   availableBalanceKES + lockedBalanceKES === tokenBalanceNT (within 0.01 KES tolerance)
  */
 async function validateWalletInternalConsistency() {
-  const wallets = await Wallet.find({});
+  const wallets = await Wallet.find({}).populate('user', 'name email');
   const mismatches = [];
 
   for (const w of wallets) {
-    const computed = Number((w.availableBalanceKES + w.lockedBalanceKES).toFixed(2));
-    const diff = Math.abs(computed - w.tokenBalanceNT);
+    const avail = parseFloat(w.availableBalanceKES ? w.availableBalanceKES.toString() : '0');
+    const locked = parseFloat(w.lockedBalanceKES ? w.lockedBalanceKES.toString() : '0');
+    const tokenBal = parseFloat(w.tokenBalanceNT ? w.tokenBalanceNT.toString() : '0');
+
+    const computed = Number((avail + locked).toFixed(2));
+    const diff = Math.abs(computed - tokenBal);
     if (diff > 0.01) {
       mismatches.push({
-        userId: w.user,
+        userId: w.user?._id || w.user,
+        username: w.user?.name || 'N/A',
+        email: w.user?.email || 'N/A',
         walletType: w.walletType,
-        tokenBalanceNT: w.tokenBalanceNT,
-        availableBalanceKES: w.availableBalanceKES,
-        lockedBalanceKES: w.lockedBalanceKES,
+        tokenBalanceNT: tokenBal,
+        availableBalanceKES: avail,
+        lockedBalanceKES: locked,
         computedTotal: computed,
-        discrepancyKES: Number((computed - w.tokenBalanceNT).toFixed(2))
+        discrepancyKES: Number((computed - tokenBal).toFixed(2))
       });
     }
   }
@@ -174,9 +182,9 @@ async function generateReconciliationReport() {
   const wallets = await Wallet.find({});
   const stats = {
     totalWallets: wallets.length,
-    totalAvailableKES: Number(wallets.reduce((s, w) => s + w.availableBalanceKES, 0).toFixed(2)),
-    totalLockedKES: Number(wallets.reduce((s, w) => s + w.lockedBalanceKES, 0).toFixed(2)),
-    totalTokenBalanceNT: Number(wallets.reduce((s, w) => s + w.tokenBalanceNT, 0).toFixed(2)),
+    totalAvailableKES: Number(wallets.reduce((s, w) => s + parseFloat(w.availableBalanceKES ? w.availableBalanceKES.toString() : '0'), 0).toFixed(2)),
+    totalLockedKES: Number(wallets.reduce((s, w) => s + parseFloat(w.lockedBalanceKES ? w.lockedBalanceKES.toString() : '0'), 0).toFixed(2)),
+    totalTokenBalanceNT: Number(wallets.reduce((s, w) => s + parseFloat(w.tokenBalanceNT ? w.tokenBalanceNT.toString() : '0'), 0).toFixed(2)),
     byType: {
       student: wallets.filter(w => w.walletType === 'student').length,
       vendor: wallets.filter(w => w.walletType === 'vendor').length,
@@ -187,7 +195,7 @@ async function generateReconciliationReport() {
 
   const RefundRequest = require('../models/RefundRequest');
   const pendingRefunds = await RefundRequest.find({ status: 'pending_admin_approval' }).lean();
-  const totalPendingRefundKES = pendingRefunds.reduce((s, r) => s + r.amountKES, 0);
+  const totalPendingRefundKES = pendingRefunds.reduce((s, r) => s + parseFloat(r.amountKES ? r.amountKES.toString() : '0'), 0);
 
   return {
     generatedAt: timestamp,

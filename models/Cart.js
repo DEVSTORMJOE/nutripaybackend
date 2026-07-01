@@ -6,7 +6,7 @@ const MealSnapshotSchema = new mongoose.Schema(
     name: { type: String, required: true },
     category: { type: String, required: true },
     imageUrl: { type: String, default: "" },
-    price: { type: Number, required: true, min: 0 },
+    price: { type: mongoose.Schema.Types.Decimal128, required: true, min: 0 },
     nutrition: { type: Object, default: {} },
   },
   { _id: false }

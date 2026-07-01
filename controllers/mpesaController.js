@@ -5,6 +5,7 @@ const mpesaService = require('../services/mpesaService');
 const walletService = require('../services/walletService');
 const stellarTreasuryService = require('../services/stellarTreasuryService');
 const crypto = require('crypto');
+const { runInTransaction } = require('../utils/transactionHelper');
 
 // Start M-Pesa STK Push
 const mpesaDeposit = async (req, res) => {
@@ -58,293 +59,382 @@ const mpesaCallback = async (req, res) => {
 
         const callbackVerification = mpesaService.verifyCallback(req.body);
         const { checkoutRequestID } = callbackVerification;
+        const merchantRequestID = req.body.Body?.stkCallback?.MerchantRequestID;
 
-        // Check if this callback corresponds to a SponsorRequest
-        const SponsorRequest = require('../models/SponsorRequest');
-        const sponsorRequest = await SponsorRequest.findOne({ checkoutRequestID });
+        // Perform early check for idempotency in Transaction collection
+        const queryOr = [];
+        if (checkoutRequestID) queryOr.push({ checkoutRequestId: checkoutRequestID });
+        if (merchantRequestID) queryOr.push({ merchantRequestId: merchantRequestID });
+        if (callbackVerification.success && callbackVerification.mpesaReceiptNumber) {
+            queryOr.push({ paymentReference: callbackVerification.mpesaReceiptNumber });
+        }
 
-        if (sponsorRequest) {
-            const User = require('../models/User');
-            if (!callbackVerification.success) {
-                console.log(`M-Pesa STK Push for sponsor request ${sponsorRequest.token} failed or cancelled.`);
-                sponsorRequest.status = 'failed';
-                await sponsorRequest.save();
-                const errorLogger = require('../utils/errorLogger');
-                await errorLogger.logError('mpesa', `Sponsor request STK Push payment failed/cancelled for ${sponsorRequest.sponsorEmail}`, {
-                    checkoutRequestID,
-                    sponsorEmail: sponsorRequest.sponsorEmail,
-                    sponsorName: sponsorRequest.sponsorName,
-                    amountKES: sponsorRequest.subtotalKes || sponsorRequest.amountKES,
-                    reason: callbackVerification.message || 'Cancelled by user (Code 1032)'
-                }, 'warn');
+        if (queryOr.length > 0) {
+            const existingTx = await Transaction.findOne({ $or: queryOr });
+            if (existingTx) {
+                console.log(`[Idempotency Warning] Webhook already processed. checkoutRequestID: ${checkoutRequestID}`);
                 return res.json({ ResponseCode: "0", ResponseDesc: "Success" });
             }
+        }
 
-            // Successfully paid sponsor request!
-            const { amountPaid, mpesaReceiptNumber, phonePaidFrom } = callbackVerification;
+        const mongoose = require('mongoose');
+        const escrowService = require('../services/escrowService');
 
-            let sponsor = await User.findOne({ email: sponsorRequest.sponsorEmail });
-            if (!sponsor) {
-                const crypto = require('crypto');
-                const generatedPassword = crypto.randomBytes(8).toString("hex");
-                sponsor = await User.create({
-                    name: sponsorRequest.sponsorName,
-                    email: sponsorRequest.sponsorEmail,
-                    password: generatedPassword,
-                    role: 'sponsor',
-                    isApproved: true
-                });
+        // Run the state changes inside an atomic transaction session
+        const result = await runInTransaction(async (session) => {
+            // Check if this callback corresponds to a SponsorRequest
+            const SponsorRequest = require('../models/SponsorRequest');
+            const sponsorRequest = session
+                ? await SponsorRequest.findOne({ checkoutRequestID }).session(session)
+                : await SponsorRequest.findOne({ checkoutRequestID });
 
-                const Sponsor = require('../models/Sponsor');
-                await Sponsor.create({
+            if (sponsorRequest) {
+                const User = require('../models/User');
+                if (!callbackVerification.success) {
+                    console.log(`M-Pesa STK Push for sponsor request ${sponsorRequest.token} failed or cancelled.`);
+                    sponsorRequest.status = 'failed';
+                    await sponsorRequest.save(session ? { session } : {});
+                    const errorLogger = require('../utils/errorLogger');
+                    await errorLogger.logError('mpesa', `Sponsor request STK Push payment failed/cancelled for ${sponsorRequest.sponsorEmail}`, {
+                        checkoutRequestID,
+                        sponsorEmail: sponsorRequest.sponsorEmail,
+                        sponsorName: sponsorRequest.sponsorName,
+                        amountKES: sponsorRequest.subtotalKes || sponsorRequest.amountKES,
+                        reason: callbackVerification.message || 'Cancelled by user (Code 1032)'
+                    }, 'warn');
+                    return { response: { ResponseCode: "0", ResponseDesc: "Success" } };
+                }
+
+                // Successfully paid sponsor request!
+                const { amountPaid, mpesaReceiptNumber, phonePaidFrom } = callbackVerification;
+
+                let sponsor = session
+                    ? await User.findOne({ email: sponsorRequest.sponsorEmail }).session(session)
+                    : await User.findOne({ email: sponsorRequest.sponsorEmail });
+                if (!sponsor) {
+                    const crypto = require('crypto');
+                    const generatedPassword = crypto.randomBytes(8).toString("hex");
+                    const userDocs = [{
+                        name: sponsorRequest.sponsorName,
+                        email: sponsorRequest.sponsorEmail,
+                        password: generatedPassword,
+                        role: 'sponsor',
+                        isApproved: true
+                    }];
+                    const createdUsers = session
+                        ? await User.create(userDocs, { session })
+                        : await User.create(userDocs);
+                    sponsor = createdUsers[0];
+
+                    const Sponsor = require('../models/Sponsor');
+                    const sponsorDocs = [{
+                        user: sponsor._id,
+                        organizationName: sponsorRequest.sponsorName || "Sponsor",
+                        contactPhone: ""
+                    }];
+                    if (session) {
+                        await Sponsor.create(sponsorDocs, { session });
+                    } else {
+                        await Sponsor.create(sponsorDocs);
+                    }
+                }
+
+                const extraFields = {
+                    checkoutRequestId: checkoutRequestID,
+                    merchantRequestId: merchantRequestID,
+                    paymentReference: mpesaReceiptNumber
+                };
+
+                // Credit sponsor wallet
+                await walletService.creditWallet(
+                    sponsor._id,
+                    amountPaid,
+                    'deposit',
+                    'mpesa',
+                    `M-Pesa Sponsor Payment (Receipt: ${mpesaReceiptNumber})`,
+                    'self',
+                    false,
+                    'none',
+                    session,
+                    false,
+                    extraFields
+                );
+
+                // Debit sponsor wallet
+                await walletService.debitWallet(
+                    sponsor._id,
+                    amountPaid,
+                    'funding',
+                    'wallet',
+                    `Subscription quick sponsor funding for student: ${sponsorRequest.student}`,
+                    false,
+                    session,
+                    extraFields
+                );
+
+                // Credit student wallet
+                const creditRes = await walletService.creditWallet(
+                    sponsorRequest.student,
+                    amountPaid,
+                    'funding',
+                    'wallet',
+                    `Sponsor request funding from sponsor: ${sponsor._id}`,
+                    'sponsor',
+                    true,
+                    'subscription_only',
+                    session,
+                    false,
+                    extraFields
+                );
+                creditRes.transaction.paymentSource = 'sponsor_funds';
+                await creditRes.transaction.save(session ? { session } : {});
+
+                // Log audit event for sponsor funding
+                const AuditLog = require('../models/AuditLog');
+                await AuditLog.create([{
+                    action: 'sponsor_funding',
                     user: sponsor._id,
-                    organizationName: sponsorRequest.sponsorName || "Sponsor",
-                    contactPhone: ""
-                });
+                    details: {
+                        studentId: sponsorRequest.student,
+                        amountKES: amountPaid,
+                        mpesaReceiptNumber,
+                        sponsorRequestToken: sponsorRequest.token
+                    }
+                }], session ? { session } : {});
+
+                // Immediately lock subscription funds
+                await escrowService.lockSubscriptionFunds(sponsorRequest.student, amountPaid, sponsor._id, session);
+
+                // Update Deliveries status to pending
+                const Delivery = require('../models/Delivery');
+                if (session) {
+                    await Delivery.updateMany({ _id: { $in: sponsorRequest.deliveryIds } }, { $set: { status: 'pending' } }).session(session);
+                } else {
+                    await Delivery.updateMany({ _id: { $in: sponsorRequest.deliveryIds } }, { $set: { status: 'pending' } });
+                }
+
+                // Create active subscription
+                const Subscription = require('../models/Subscription');
+                const subDocs = [{
+                    student: sponsorRequest.student,
+                    planId: sponsorRequest.planId || 'essential',
+                    sponsor: sponsor._id,
+                    status: 'active',
+                    startDate: sponsorRequest.startDate || new Date(),
+                    endDate: sponsorRequest.endDate || new Date(Date.now() + 27 * 24 * 60 * 60 * 1000),
+                    totalPaidKES: amountPaid
+                }];
+                if (session) {
+                    await Subscription.create(subDocs, { session });
+                } else {
+                    await Subscription.create(subDocs);
+                }
+
+                // Set student profile subscription active
+                const Student = require('../models/Student');
+                const studentProfile = session
+                    ? await Student.findOne({ user: sponsorRequest.student }).session(session)
+                    : await Student.findOne({ user: sponsorRequest.student });
+                if (studentProfile) {
+                    studentProfile.subscriptionActive = true;
+                    await studentProfile.save(session ? { session } : {});
+                }
+
+                // Mark request as paid
+                sponsorRequest.status = 'paid';
+                await sponsorRequest.save(session ? { session } : {});
+
+                return {
+                    response: { ResponseCode: "0", ResponseDesc: "Success" },
+                    needsMint: true,
+                    amount: amountPaid,
+                    mpesaReceiptNumber,
+                    transactionToUpdate: creditRes.transaction._id
+                };
             }
 
-            // Credit sponsor wallet
-            await walletService.creditWallet(
-                sponsor._id,
+            // Check if this callback corresponds to an instant custom order
+            const CustomOrder = require('../models/CustomOrder');
+            const customOrder = session
+                ? await CustomOrder.findOne({ checkoutRequestID }).session(session)
+                : await CustomOrder.findOne({ checkoutRequestID });
+
+            if (customOrder) {
+                if (!callbackVerification.success) {
+                    console.log(`M-Pesa STK Push for custom order ${customOrder.orderId} failed or cancelled.`);
+                    customOrder.status = 'failed';
+                    await customOrder.save(session ? { session } : {});
+                    return { response: { ResponseCode: "0", ResponseDesc: "Success" } };
+                }
+
+                // Successfully paid direct M-Pesa order!
+                const { amountPaid, mpesaReceiptNumber, phonePaidFrom } = callbackVerification;
+                
+                await walletService.processMpesaDirectCustomOrder(
+                    checkoutRequestID,
+                    amountPaid,
+                    mpesaReceiptNumber,
+                    phonePaidFrom,
+                    session
+                );
+
+                return {
+                    response: { ResponseCode: "0", ResponseDesc: "Success" },
+                    needsMint: true,
+                    amount: amountPaid,
+                    mpesaReceiptNumber,
+                    customOrderId: customOrder.orderId,
+                    vendorId: customOrder.vendor
+                };
+            }
+
+            // Check if this callback corresponds to an N-Dash errand order
+            const NDashOrder = require('../models/NDashOrder');
+            const nDashOrder = session
+                ? await NDashOrder.findOne({ checkoutRequestID }).session(session)
+                : await NDashOrder.findOne({ checkoutRequestID });
+
+            if (nDashOrder) {
+                if (!callbackVerification.success) {
+                    console.log(`[N-Dash M-Pesa Callback] STK Push for N-Dash order ${nDashOrder.orderId} failed or cancelled.`);
+                    nDashOrder.status = 'cancelled';
+                    await nDashOrder.save(session ? { session } : {});
+                    return { response: { ResponseCode: "0", ResponseDesc: "Success" } };
+                }
+
+                // Successfully paid N-Dash order!
+                const { amountPaid, mpesaReceiptNumber, phonePaidFrom } = callbackVerification;
+                const ndashPaymentService = require('../services/ndashPaymentService');
+                await ndashPaymentService.processPaymentSuccess(checkoutRequestID, mpesaReceiptNumber, amountPaid, phonePaidFrom, session);
+
+                return {
+                    response: { ResponseCode: "0", ResponseDesc: "Success" }
+                };
+            }
+
+            let depositRecord = session
+                ? await MpesaDeposit.findOne({ checkoutRequestID }).session(session)
+                : await MpesaDeposit.findOne({ checkoutRequestID });
+
+            if (!callbackVerification.success) {
+                console.log(`STK Push failed or cancelled. Message: ${callbackVerification.message}`);
+                if (depositRecord) {
+                    depositRecord.status = callbackVerification.resultCode === 1032 ? 'cancelled' : 'failed';
+                    await depositRecord.save(session ? { session } : {});
+                }
+                const errorLogger = require('../utils/errorLogger');
+                await errorLogger.logError('mpesa', `M-Pesa deposit STK Push failed/cancelled for user ${userId || 'unknown'}`, {
+                    checkoutRequestID,
+                    userId,
+                    amountKES: depositRecord ? depositRecord.amountKES : 'unknown',
+                    resultCode: callbackVerification.resultCode,
+                    reason: callbackVerification.message || 'Cancelled by user (Code 1032)'
+                }, 'warn');
+                return { response: { result: "Acknowledged cancellation/failure" } };
+            }
+
+            // Successfully paid standard deposit!
+            const { amountPaid, mpesaReceiptNumber, phonePaidFrom } = callbackVerification;
+
+            if (depositRecord) {
+                depositRecord.status = 'completed';
+                depositRecord.receiptNumber = mpesaReceiptNumber;
+                await depositRecord.save(session ? { session } : {});
+            } else {
+                console.warn(`Webhook received for CheckoutRequestID ${checkoutRequestID} but no pending deposit found in DB.`);
+            }
+
+            const extraFields = {
+                checkoutRequestId: checkoutRequestID,
+                merchantRequestId: merchantRequestID,
+                paymentReference: mpesaReceiptNumber
+            };
+
+            const creditResult = await walletService.creditWallet(
+                userId,
                 amountPaid,
                 'deposit',
                 'mpesa',
-                `M-Pesa Sponsor Payment (Receipt: ${mpesaReceiptNumber})`
+                `M-Pesa Deposit (Receipt: ${mpesaReceiptNumber})`,
+                'self',
+                false,
+                'none',
+                session,
+                false,
+                extraFields
             );
 
-            // Debit sponsor wallet
-            await walletService.debitWallet(
-                sponsor._id,
-                amountPaid,
-                'funding',
-                'wallet',
-                `Subscription quick sponsor funding for student: ${sponsorRequest.student}`
-            );
-
-            // Credit student wallet
-            const creditRes = await walletService.creditWallet(
-                sponsorRequest.student,
-                amountPaid,
-                'funding',
-                'wallet',
-                `Sponsor request funding from sponsor: ${sponsor._id}`
-            );
-            creditRes.transaction.paymentSource = 'sponsor_funds';
-            await creditRes.transaction.save();
-
-            // Immediately lock subscription funds
-            const lockResult = await escrowService.lockSubscriptionFunds(sponsorRequest.student, amountPaid, sponsor._id);
-
-            // Update Deliveries status to pending
-            const Delivery = require('../models/Delivery');
-            await Delivery.updateMany({ _id: { $in: sponsorRequest.deliveryIds } }, { $set: { status: 'pending' } });
-
-            // Create active subscription
-            const Subscription = require('../models/Subscription');
-            await Subscription.create({
-                student: sponsorRequest.student,
-                planId: sponsorRequest.planId || 'essential',
-                sponsor: sponsor._id,
-                status: 'active',
-                startDate: sponsorRequest.startDate || new Date(),
-                endDate: sponsorRequest.endDate || new Date(Date.now() + 27 * 24 * 60 * 60 * 1000),
-                totalPaidKES: amountPaid
-            });
-
-            // Set student profile subscription active
-            const Student = require('../models/Student');
-            const studentProfile = await Student.findOne({ user: sponsorRequest.student });
-            if (studentProfile) {
-                studentProfile.subscriptionActive = true;
-                await studentProfile.save();
-            }
-
-            // Mark request as paid
-            sponsorRequest.status = 'paid';
-            await sponsorRequest.save();
-
-            // COMPULSORY On-chain settlement: Mint equivalent custom tokens
-            let stellarTxHash = "";
-            let settlementStatus = "pending";
-            try {
-                const stellarTreasuryService = require('../services/stellarTreasuryService');
-                stellarTxHash = await stellarTreasuryService.mintNT(amountPaid);
-                settlementStatus = "synced";
-                console.log("✅ Sponsor order direct on-chain minting successful. Tx Hash:", stellarTxHash);
-            } catch (err) {
-                console.error("❌ Sponsor order direct on-chain minting failed. Marked failed for retry queue:", err.message);
-                settlementStatus = "failed";
-            }
-
-            // Update transaction record
-            if (creditRes && creditRes.transaction) {
-                creditRes.transaction.stellarTxHash = stellarTxHash || null;
-                creditRes.transaction.settlementStatus = settlementStatus;
-                await creditRes.transaction.save();
-            }
-
-            return res.json({ ResponseCode: "0", ResponseDesc: "Success" });
-        }
-
-        // Check if this callback corresponds to an instant custom order
-        const CustomOrder = require('../models/CustomOrder');
-        const customOrder = await CustomOrder.findOne({ checkoutRequestID });
-
-        if (customOrder) {
-            if (!callbackVerification.success) {
-                console.log(`M-Pesa STK Push for custom order ${customOrder.orderId} failed or cancelled.`);
-                customOrder.status = 'failed';
-                await customOrder.save();
-                return res.json({ ResponseCode: "0", ResponseDesc: "Success" });
-            }
-
-            // Successfully paid direct M-Pesa order!
-            const { amountPaid, mpesaReceiptNumber, phonePaidFrom } = callbackVerification;
-            
-            const processResult = await walletService.processMpesaDirectCustomOrder(
-                checkoutRequestID,
-                amountPaid,
+            return {
+                response: { ResponseCode: "0", ResponseDesc: "Success" },
+                needsMint: true,
+                amount: amountPaid,
                 mpesaReceiptNumber,
-                phonePaidFrom
-            );
+                transactionToUpdate: creditResult.transaction ? creditResult.transaction._id : null,
+                userId
+            };
+        });
 
-            // COMPULSORY On-chain settlement: Mint equivalent custom tokens to back the new physical cash
+        // After transaction session completes successfully, trigger on-chain minting outside the session block!
+        if (result && result.needsMint) {
+            const { amount, transactionToUpdate, mpesaReceiptNumber, customOrderId, vendorId, userId: notifyUserId } = result;
             let stellarTxHash = "";
             let settlementStatus = "pending";
             try {
-                stellarTxHash = await stellarTreasuryService.mintNT(amountPaid);
+                stellarTxHash = await stellarTreasuryService.mintNT(amount);
                 settlementStatus = "synced";
-                console.log("✅ Custom order direct on-chain minting successful. Tx Hash:", stellarTxHash);
+                console.log(`✅ On-chain minting succeeded. Hash: ${stellarTxHash}`);
             } catch (err) {
-                console.error("❌ Custom order direct on-chain minting failed. Marked failed for retry queue:", err.message);
+                console.error("❌ On-chain minting failed. Marked for retry queue:", err.message);
                 settlementStatus = "failed";
             }
 
-            // Update custom order transactions with on-chain settlement info
             try {
-                const txs = await Transaction.find({
-                    description: { $regex: mpesaReceiptNumber, $options: 'i' }
-                });
-                for (let tx of txs) {
-                    tx.stellarTxHash = stellarTxHash || null;
-                    tx.settlementStatus = settlementStatus;
-                    await tx.save();
+                if (transactionToUpdate) {
+                    await Transaction.findByIdAndUpdate(transactionToUpdate, {
+                        $set: { stellarTxHash: stellarTxHash || null, settlementStatus }
+                    });
+                } else if (mpesaReceiptNumber) {
+                    await Transaction.updateMany(
+                        { description: { $regex: mpesaReceiptNumber, $options: 'i' } },
+                        { $set: { stellarTxHash: stellarTxHash || null, settlementStatus } }
+                    );
                 }
-            } catch (txErr) {
-                console.error("Failed to update custom order transaction settlement status:", txErr.message);
+            } catch (updateErr) {
+                console.error("Failed to update transaction settlement details:", updateErr.message);
             }
 
-            // Notify Vendor
-            const Vendor = require('../models/Vendor');
-            const vendorProfile = await Vendor.findById(customOrder.vendor);
-            if (vendorProfile) {
-                const mealPrice = customOrder.items.reduce((sum, item) => sum + ((item.price || 0) * (item.quantity || 1)), 0);
-                const Notification = require('../models/Notification');
-                await Notification.create({
-                    user: vendorProfile.user,
-                    type: 'order',
-                    title: 'New Custom Order Paid (M-Pesa)',
-                    message: `Custom order ${customOrder.orderId} of KES ${mealPrice} has been paid via M-Pesa.`
-                });
+            if (customOrderId && vendorId) {
+                try {
+                    const Vendor = require('../models/Vendor');
+                    const vendorProfile = await Vendor.findById(vendorId);
+                    if (vendorProfile) {
+                        const Notification = require('../models/Notification');
+                        await Notification.create({
+                            user: vendorProfile.user,
+                            type: 'order',
+                            title: 'New Custom Order Paid (M-Pesa)',
+                            message: `Custom order ${customOrderId} of KES ${amount} has been paid via M-Pesa.`
+                        });
+                    }
+                } catch (notiErr) {
+                    console.warn('[mpesaCallback] Vendor notification failed:', notiErr.message);
+                }
+            } else if (notifyUserId) {
+                try {
+                    const Notification = require('../models/Notification');
+                    await Notification.create({
+                        user: notifyUserId,
+                        type: 'wallet',
+                        title: 'Wallet Funded via M-Pesa',
+                        message: `Your wallet has been credited with ${amount} KES via M-Pesa (Receipt: ${mpesaReceiptNumber}). You can now use these funds.`
+                    });
+                } catch (notiErr) {
+                    console.warn('[mpesaCallback] In-app notification failed:', notiErr.message);
+                }
             }
-
-            return res.json({ ResponseCode: "0", ResponseDesc: "Success" });
         }
 
-        // Check if this callback corresponds to an N-Dash errand order
-        const NDashOrder = require('../models/NDashOrder');
-        const nDashOrder = await NDashOrder.findOne({ checkoutRequestID });
-
-        if (nDashOrder) {
-            if (!callbackVerification.success) {
-                console.log(`[N-Dash M-Pesa Callback] STK Push for N-Dash order ${nDashOrder.orderId} failed or cancelled.`);
-                nDashOrder.status = 'cancelled';
-                await nDashOrder.save();
-                return res.json({ ResponseCode: "0", ResponseDesc: "Success" });
-            }
-
-            // Successfully paid N-Dash order!
-            const { amountPaid, mpesaReceiptNumber, phonePaidFrom } = callbackVerification;
-            const ndashPaymentService = require('../services/ndashPaymentService');
-            await ndashPaymentService.processPaymentSuccess(checkoutRequestID, mpesaReceiptNumber, amountPaid, phonePaidFrom);
-
-            return res.json({ ResponseCode: "0", ResponseDesc: "Success" });
-        }
-
-        let depositRecord = await MpesaDeposit.findOne({ checkoutRequestID });
-
-        if (!callbackVerification.success) {
-            console.log(`STK Push failed or cancelled. Message: ${callbackVerification.message}`);
-            if (depositRecord) {
-                depositRecord.status = callbackVerification.resultCode === 1032 ? 'cancelled' : 'failed';
-                await depositRecord.save();
-            }
-            const errorLogger = require('../utils/errorLogger');
-            await errorLogger.logError('mpesa', `M-Pesa deposit STK Push failed/cancelled for user ${userId || 'unknown'}`, {
-                checkoutRequestID,
-                userId,
-                amountKES: depositRecord ? depositRecord.amountKES : 'unknown',
-                resultCode: callbackVerification.resultCode,
-                reason: callbackVerification.message || 'Cancelled by user (Code 1032)'
-            }, 'warn');
-            return res.json({ result: "Acknowledged cancellation/failure" });
-        }
-
-        // Successfully paid!
-        const { amountPaid, mpesaReceiptNumber, phonePaidFrom } = callbackVerification;
-
-        if (depositRecord) {
-            depositRecord.status = 'completed';
-            depositRecord.receiptNumber = mpesaReceiptNumber;
-            await depositRecord.save();
-        } else {
-            console.warn(`Webhook received for CheckoutRequestID ${checkoutRequestID} but no pending deposit found in DB.`);
-        }
-
-        console.log(`User ${userId} successfully paid ${amountPaid} via M-Pesa ${mpesaReceiptNumber}`);
-
-        // Credit MongoDB internal custodial balance and log Transaction (defaults to sourceType = 'self')
-        const creditResult = await walletService.creditWallet(
-            userId,
-            amountPaid,
-            'deposit',
-            'mpesa',
-            `M-Pesa Deposit (Receipt: ${mpesaReceiptNumber})`
-        );
-
-        // COMPULSORY On-chain settlement: Mint equivalent custom tokens from Issuer -> Treasury
-        let stellarTxHash = "";
-        let settlementStatus = "pending";
-        try {
-            stellarTxHash = await stellarTreasuryService.mintNT(amountPaid);
-            settlementStatus = "synced";
-            console.log("✅ On-chain token minting successful. Tx Hash:", stellarTxHash);
-        } catch (err) {
-            console.error("❌ On-chain token minting failed. Marked failed for retry queue:", err.message);
-            settlementStatus = "failed";
-        }
-
-        // Update the MongoDB transaction log with the on-chain minting info
-        if (creditResult && creditResult.transaction) {
-            creditResult.transaction.stellarTxHash = stellarTxHash || null;
-            creditResult.transaction.settlementStatus = settlementStatus;
-            await creditResult.transaction.save();
-        }
-
-        // In-app notification for the user (wallet top-up)
-        try {
-            const Notification = require('../models/Notification');
-            await Notification.create({
-                user: userId,
-                type: 'wallet',
-                title: 'Wallet Funded via M-Pesa',
-                message: `Your wallet has been credited with ${amountPaid} KES via M-Pesa (Receipt: ${mpesaReceiptNumber}). You can now use these funds.`
-            });
-        } catch (e) {
-            console.warn('[mpesaCallback] In-app notification error:', e.message);
-        }
-
-        res.json({ ResponseCode: "0", ResponseDesc: "Success" });
+        return res.json(result?.response || { ResponseCode: "0", ResponseDesc: "Success" });
     } catch (e) {
         console.error("Mpesa Callback processing error:", e);
         res.status(500).json({ ResponseCode: "1", ResponseDesc: "Internal Server Error" });
@@ -410,22 +500,28 @@ const mpesaWithdraw = async (req, res) => {
         }
 
         const wallet = await Wallet.findOne({ user: userId });
-        if (!wallet || wallet.availableBalanceKES < amountKes) {
-            return res.status(400).json({ message: "Insufficient balance or missing wallet." });
+        if (!wallet) {
+            return res.status(400).json({ message: "User wallet not found." });
+        }
+
+        const currentAvail = parseFloat(wallet.availableBalanceKES ? wallet.availableBalanceKES.toString() : '0');
+        if (currentAvail < parseFloat(amountKes)) {
+            return res.status(400).json({ message: "Insufficient balance." });
         }
 
         // Lock funds into pendingWithdrawalKES locally
-        wallet.availableBalanceKES = Number((wallet.availableBalanceKES - Number(amountKes)).toFixed(2));
-        wallet.pendingWithdrawalKES = Number((wallet.pendingWithdrawalKES + Number(amountKes)).toFixed(2));
+        wallet.availableBalanceKES = mongoose.Types.Decimal128.fromString((currentAvail - parseFloat(amountKes)).toFixed(2));
+        const currentPending = parseFloat(wallet.pendingWithdrawalKES ? wallet.pendingWithdrawalKES.toString() : '0');
+        wallet.pendingWithdrawalKES = mongoose.Types.Decimal128.fromString((currentPending + parseFloat(amountKes)).toFixed(2));
         await wallet.save();
 
         // Create withdrawal request in DB
         const WithdrawalRequest = require('../models/WithdrawalRequest');
         const request = await WithdrawalRequest.create({
             user: userId,
-            amountKES: Number(amountKes),
+            amountKES: mongoose.Types.Decimal128.fromString(parseFloat(amountKes).toFixed(2)),
             phone: phone,
-            status: 'pending_approval'
+            status: 'requested'
         });
 
         res.json({ 
@@ -449,4 +545,125 @@ const getMyWithdrawalRequests = async (req, res) => {
     }
 }
 
-module.exports = { mpesaDeposit, mpesaCallback, checkMpesaStatus, mpesaWithdraw, getMyWithdrawalRequests };
+// Safaricom Webhook B2C Callback Handler
+const mpesaB2CCallback = async (req, res) => {
+    try {
+        console.log("M-Pesa B2C Callback Received:", JSON.stringify(req.body, null, 2));
+        const result = req.body.Result || req.body.Body?.stkCallback; // fallback to body wrapper if nested
+        if (!result) {
+            return res.status(400).json({ message: "Invalid B2C callback body" });
+        }
+
+        const conversationId = result.ConversationID;
+        const originatorConversationId = result.OriginatorConversationID;
+        const resultCode = result.ResultCode;
+
+        const mongoose = require('mongoose');
+        const WithdrawalRequest = require('../models/WithdrawalRequest');
+        const request = await WithdrawalRequest.findOne({
+            $or: [
+                { conversationId: conversationId },
+                { originatorConversationId: originatorConversationId }
+            ]
+        }).populate('user');
+
+        if (!request) {
+            console.warn(`[B2C Callback] No matching withdrawal request found for ConversationID: ${conversationId}`);
+            return res.json({ ResponseCode: "0", ResponseDesc: "Success" });
+        }
+
+        if (resultCode !== 0) {
+            console.log(`[B2C Callback] Withdrawal failed. Resetting status to requested. Code: ${resultCode}`);
+            request.status = 'requested';
+            await request.save();
+            return res.json({ ResponseCode: "0", ResponseDesc: "Success" });
+        }
+
+        // Payout succeeded! Transition to b2c_success
+        console.log(`[B2C Callback] Withdrawal succeeded. Processing final account payouts.`);
+        request.status = 'b2c_success';
+        await request.save();
+
+        // Move funds from pendingWithdrawalKES to totalWithdrawnKES
+        const Wallet = require('../models/Wallet');
+        const wallet = await Wallet.findOne({ user: request.user._id });
+        if (wallet) {
+            const pending = parseFloat(wallet.pendingWithdrawalKES ? wallet.pendingWithdrawalKES.toString() : '0');
+            const withdrawn = parseFloat(wallet.totalWithdrawnKES ? wallet.totalWithdrawnKES.toString() : '0');
+            const amount = parseFloat(request.amountKES.toString());
+
+            wallet.pendingWithdrawalKES = mongoose.Types.Decimal128.fromString((pending - amount).toFixed(2));
+            wallet.totalWithdrawnKES = mongoose.Types.Decimal128.fromString((withdrawn + amount).toFixed(2));
+            await wallet.save();
+
+            // Stellar Mirror transfer (Stellar custody payout Vendor -> Treasury)
+            let stellarTxHash = "";
+            let settlementStatus = "pending";
+            try {
+                const stellarTreasuryService = require('../services/stellarTreasuryService');
+                stellarTxHash = await stellarTreasuryService.moveVendorToTreasury(amount);
+                settlementStatus = "synced";
+                console.log("✅ On-chain token redemption successful. Tx Hash:", stellarTxHash);
+            } catch (err) {
+                console.error("❌ Failed to mirror withdrawal back to Treasury on Stellar:", err.message);
+                settlementStatus = "failed";
+            }
+
+            // Create Transaction log
+            const txId = crypto.randomUUID();
+            await Transaction.create([{
+                transactionId: txId,
+                fromUser: request.user._id,
+                amountKES: mongoose.Types.Decimal128.fromString(amount.toFixed(2)),
+                transactionCategory: 'withdrawal',
+                paymentMethod: 'stellar',
+                stellarTxHash: stellarTxHash || null,
+                status: 'completed',
+                settlementStatus: settlementStatus,
+                description: `M-Pesa Payout to ${request.phone} (Completed)`
+            }]);
+
+            // Log LedgerEntry
+            try {
+                const ledgerService = require('../services/ledgerService');
+                await ledgerService.recordLedgerEntry({
+                    debitWallet: wallet._id,
+                    creditWallet: null,
+                    amountKES: mongoose.Types.Decimal128.fromString(amount.toFixed(2)),
+                    transactionId: txId,
+                    reference: `M-Pesa B2C Withdrawal Completed (Receipt: B2C_Success)`,
+                    ledgerType: 'withdrawal'
+                });
+            } catch (ledgerErr) {
+                console.error("Ledger log failed in mpesaB2CCallback:", ledgerErr.message);
+            }
+
+            // Log permanent AuditLog
+            try {
+                const AuditLog = require('../models/AuditLog');
+                await AuditLog.create([{
+                    action: 'withdrawal_approval',
+                    user: request.approvedBy || request.user._id,
+                    details: {
+                        withdrawalRequestId: request._id,
+                        amountKES: amount,
+                        phone: request.phone,
+                        stellarTxHash
+                    }
+                }]);
+            } catch (auditErr) {
+                console.error("Audit log failed in mpesaB2CCallback:", auditErr.message);
+            }
+        }
+
+        request.status = 'completed';
+        await request.save();
+
+        return res.json({ ResponseCode: "0", ResponseDesc: "Success" });
+  } catch (err) {
+        console.error("B2C Callback handler error:", err);
+        return res.status(500).json({ ResponseCode: "1", ResponseDesc: "Internal Server Error" });
+  }
+};
+
+module.exports = { mpesaDeposit, mpesaCallback, checkMpesaStatus, mpesaWithdraw, getMyWithdrawalRequests, mpesaB2CCallback };

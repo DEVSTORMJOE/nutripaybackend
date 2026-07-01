@@ -15,15 +15,15 @@ const subscriptionSchema = new mongoose.Schema({
     ref: 'User'
   },
   dailyCost: {
-    type: Number
+    type: mongoose.Schema.Types.Decimal128
   },
   planId: {
     type: String,
     default: 'essential'
   },
   totalPaidKES: {
-    type: Number,
-    default: 0
+    type: mongoose.Schema.Types.Decimal128,
+    default: "0.00"
   },
   startDate: {
     type: Date,

@@ -54,10 +54,7 @@ const NT = new Asset(NUTRITOKEN_CODE, platformWallets.issuer.public);
  * Utility to format amount to 7 decimal places as required by Stellar SDK
  */
 function formatAmount(amount) {
-  let strAmount = Number(amount).toFixed(7);
-  // Remove trailing zeros and possible trailing dot
-  strAmount = strAmount.replace(/0+$/, '').replace(/\.$/, '');
-  return strAmount || "0";
+  return Number(amount).toFixed(7);
 }
 
 /**

@@ -1,6 +1,6 @@
 const express = require("express");
 const router = express.Router();
-const { protect } = require("../middleware/authMiddleware");
+const { protect, checkActiveWallet } = require("../middleware/authMiddleware");
 
 const { getCart, replaceCart, clearCart, checkoutCart, addSponsorCheckout, customPlanCheckout, customPlanSponsorCheckout, dailyTemplateCheckout } = require("../controllers/cartController");
 
@@ -8,10 +8,10 @@ const { getCart, replaceCart, clearCart, checkoutCart, addSponsorCheckout, custo
 router.get("/", protect, getCart);
 router.put("/", protect, replaceCart);
 router.delete("/clear", protect, clearCart);
-router.post("/checkout", protect, checkoutCart);
-router.post("/checkout/sponsor", protect, addSponsorCheckout);
-router.post("/checkout/custom-plan", protect, customPlanCheckout);
-router.post("/checkout/custom-plan/sponsor", protect, customPlanSponsorCheckout);
-router.post("/checkout/daily-template", protect, dailyTemplateCheckout);
+router.post("/checkout", protect, checkActiveWallet, checkoutCart);
+router.post("/checkout/sponsor", protect, checkActiveWallet, addSponsorCheckout);
+router.post("/checkout/custom-plan", protect, checkActiveWallet, customPlanCheckout);
+router.post("/checkout/custom-plan/sponsor", protect, checkActiveWallet, customPlanSponsorCheckout);
+router.post("/checkout/daily-template", protect, checkActiveWallet, dailyTemplateCheckout);
 
 module.exports = router;

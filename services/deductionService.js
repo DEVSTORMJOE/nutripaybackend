@@ -1,3 +1,4 @@
+const mongoose = require('mongoose');
 const cron = require('node-cron');
 const Subscription = require('../models/Subscription');
 const Wallet = require('../models/Wallet');
@@ -57,11 +58,17 @@ const processDailyDeductions = async () => {
       const vendorShare = Number((dailyCost - commission).toFixed(2));
 
       // Deduct locally from locked balance (fallback to available if locked is zero)
-      if (studentWallet.lockedBalanceKES >= dailyCost) {
-        studentWallet.lockedBalanceKES -= dailyCost;
-      } else if (studentWallet.availableBalanceKES >= dailyCost) {
-        studentWallet.availableBalanceKES -= dailyCost;
-        studentWallet.totalSpentKES += dailyCost;
+      const mongoose = require('mongoose');
+      const studentLocked = parseFloat(studentWallet.lockedBalanceKES ? studentWallet.lockedBalanceKES.toString() : '0');
+      const studentAvail = parseFloat(studentWallet.availableBalanceKES ? studentWallet.availableBalanceKES.toString() : '0');
+      const studentSpent = parseFloat(studentWallet.totalSpentKES ? studentWallet.totalSpentKES.toString() : '0');
+      const vendorAvail = parseFloat(vendorWallet.availableBalanceKES ? vendorWallet.availableBalanceKES.toString() : '0');
+
+      if (studentLocked >= dailyCost) {
+        studentWallet.lockedBalanceKES = mongoose.Types.Decimal128.fromString((studentLocked - dailyCost).toFixed(2));
+      } else if (studentAvail >= dailyCost) {
+        studentWallet.availableBalanceKES = mongoose.Types.Decimal128.fromString((studentAvail - dailyCost).toFixed(2));
+        studentWallet.totalSpentKES = mongoose.Types.Decimal128.fromString((studentSpent + dailyCost).toFixed(2));
       } else {
         console.warn(`Insufficient student balance for subscription ${sub._id}`);
         continue;
@@ -69,7 +76,7 @@ const processDailyDeductions = async () => {
       await studentWallet.save();
 
       // Credit Vendor locally
-      vendorWallet.availableBalanceKES += vendorShare;
+      vendorWallet.availableBalanceKES = mongoose.Types.Decimal128.fromString((vendorAvail + vendorShare).toFixed(2));
       await vendorWallet.save();
 
       // Perform Platform Stellar Settlement

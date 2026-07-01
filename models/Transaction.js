@@ -15,7 +15,7 @@ const transactionSchema = new mongoose.Schema({
     ref: 'User'
   },
   amountKES: {
-    type: Number,
+    type: mongoose.Schema.Types.Decimal128,
     required: true
   },
   transactionCategory: {
@@ -69,8 +69,21 @@ const transactionSchema = new mongoose.Schema({
     type: String,
     enum: ['pending', 'synced', 'failed'],
     default: 'pending'
+  },
+  checkoutRequestId: {
+    type: String
+  },
+  merchantRequestId: {
+    type: String
+  },
+  paymentReference: {
+    type: String
   }
 }, { timestamps: true });
+
+transactionSchema.index({ checkoutRequestId: 1 }, { unique: true, sparse: true });
+transactionSchema.index({ merchantRequestId: 1 }, { unique: true, sparse: true });
+transactionSchema.index({ paymentReference: 1 }, { unique: true, sparse: true });
 
 const Transaction = mongoose.models.Transaction || mongoose.model('Transaction', transactionSchema);
 module.exports = Transaction;

@@ -14,19 +14,19 @@ const nDashOrderSchema = new mongoose.Schema({
   items: [{
     name: { type: String, required: true },
     quantity: { type: Number, required: true, default: 1 },
-    estimatedPrice: { type: Number, required: true },
+    estimatedPrice: { type: mongoose.Schema.Types.Decimal128, required: true },
     notes: { type: String, default: "" }
   }],
   shoppingCost: {
-    type: Number,
+    type: mongoose.Schema.Types.Decimal128,
     required: true
   },
   platformFee: {
-    type: Number,
+    type: mongoose.Schema.Types.Decimal128,
     required: true
   },
   grandTotal: {
-    type: Number,
+    type: mongoose.Schema.Types.Decimal128,
     required: true
   },
   deliveryLocation: {

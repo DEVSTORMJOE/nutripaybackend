@@ -28,7 +28,7 @@ const sponsorRequestSchema = new mongoose.Schema({
     ref: 'Delivery'
   }],
   amountKES: {
-    type: Number,
+    type: mongoose.Schema.Types.Decimal128,
     required: true
   },
   status: {

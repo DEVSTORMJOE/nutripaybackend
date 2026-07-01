@@ -30,9 +30,13 @@ const deliverySchema = new mongoose.Schema({
     default: 'pending'
   },
   totalCost: {
-    type: Number,
+    type: mongoose.Schema.Types.Decimal128,
     required: true,
-    default: 0
+    default: "0.00"
+  },
+  paymentReleased: {
+    type: Boolean,
+    default: false
   },
   timeSlot: {
     type: String,

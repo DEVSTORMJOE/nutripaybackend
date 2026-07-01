@@ -19,11 +19,7 @@ const EXCHANGE_RATE_KES_TO_XLM = 0.05;
 
 function KES_to_XLM(kesAmount) {
   const amount = parseFloat(kesAmount) * EXCHANGE_RATE_KES_TO_XLM;
-  // Stellar amounts must be string and have max 7 decimal places
-  let strAmount = amount.toFixed(7);
-  // Remove trailing zeros and possible trailing dot
-  strAmount = strAmount.replace(/0+$/, '').replace(/\.$/, '');
-  return strAmount || "0";
+  return Number(amount).toFixed(7);
 }
 
 function XLM_to_KES(xlmAmount) {

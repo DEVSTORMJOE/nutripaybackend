@@ -20,11 +20,11 @@ const {
   getAdminStats,
   mpesaCallback
 } = require('../controllers/ndashController');
-const { protect } = require('../middleware/authMiddleware');
+const { protect, checkActiveWallet } = require('../middleware/authMiddleware');
 const { role } = require('../middleware/roleMiddleware');
 
 // Student routes
-router.post('/order', protect, role('student'), placeOrder);
+router.post('/order', protect, role('student'), checkActiveWallet, placeOrder);
 router.get('/status/:checkoutRequestID', protect, role('student'), checkPaymentStatus);
 router.get('/student/orders', protect, role('student'), getStudentOrders);
 router.get('/student/orders/:id', protect, role('student'), getStudentOrderDetails);

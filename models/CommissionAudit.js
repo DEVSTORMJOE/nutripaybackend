@@ -12,19 +12,19 @@ const commissionAuditSchema = new mongoose.Schema({
     required: true
   },
   oldVendorPercent: {
-    type: Number,
+    type: mongoose.Schema.Types.Decimal128,
     required: true
   },
   newVendorPercent: {
-    type: Number,
+    type: mongoose.Schema.Types.Decimal128,
     required: true
   },
   oldPlatformPercent: {
-    type: Number,
+    type: mongoose.Schema.Types.Decimal128,
     required: true
   },
   newPlatformPercent: {
-    type: Number,
+    type: mongoose.Schema.Types.Decimal128,
     required: true
   },
   reason: {

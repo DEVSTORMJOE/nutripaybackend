@@ -210,7 +210,40 @@ app.use((err, req, res, next) => {
 
 const PORT = process.env.PORT || 5000;
 
-app.listen(PORT, () => {
+// Wrap express server in http server for Socket.IO support
+const http = require("http");
+const { Server } = require("socket.io");
+
+const server = http.createServer(app);
+const io = new Server(server, {
+  cors: {
+    origin: allowedOrigins,
+    methods: ["GET", "POST"],
+    credentials: true
+  }
+});
+
+// Bind io instance globally for the notificationDispatcher to access
+global.io = io;
+
+io.on("connection", (socket) => {
+  console.log("Real-time notification client connected:", socket.id);
+
+  // Users join a custom room matching their account ID
+  socket.on("join", (userId) => {
+    if (userId) {
+      const room = `user_${userId}`;
+      socket.join(room);
+      console.log(`Socket ${socket.id} joined room ${room}`);
+    }
+  });
+
+  socket.on("disconnect", () => {
+    console.log("Real-time notification client disconnected:", socket.id);
+  });
+});
+
+server.listen(PORT, () => {
   console.log(`Server started on port ${PORT}`);
   console.log("Allowed CORS origins:", allowedOrigins);
 
