@@ -57,6 +57,20 @@ router.get('/reconciliation', protect, role('admin'), async (req, res) => {
   }
 });
 
+router.post('/reconciliation/retry', protect, role('admin'), async (req, res) => {
+  try {
+    const settlementRetryService = require('../services/settlementRetryService');
+    const result = await settlementRetryService.retryFailedSettlements();
+    res.json({
+      message: `Successfully processed retry queue. Synced: ${result.successful} transaction(s)`,
+      ...result
+    });
+  } catch (err) {
+    console.error('Manual settlement retry error:', err);
+    res.status(500).json({ message: 'Retry failed: ' + err.message });
+  }
+});
+
 // Stellar Security Hardening Endpoints
 router.get('/stellar-security/status', protect, role('admin'), async (req, res) => {
   try {
