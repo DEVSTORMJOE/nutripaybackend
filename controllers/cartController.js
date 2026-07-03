@@ -77,26 +77,42 @@ async function checkoutCart(req, res) {
     if (monthlyTemplate) {
       // Enforce single active subscription constraint
       const SubscriptionModel = require('../models/Subscription');
+      const Student = require('../models/Student');
+
+      // Enforce single active subscription constraint atomically to mitigate concurrent checkout races (Double Checkout)
+      const studentProfile = await Student.findOneAndUpdate(
+        { user: userId, subscriptionActive: { $ne: true } },
+        { $set: { subscriptionActive: true } },
+        { new: true }
+      ).populate('deliveryLocation');
+
+      if (!studentProfile) {
+        return res.status(400).json({ message: "You already have an active subscription or a checkout is currently in progress." });
+      }
+
+      // Double-check active subscription in case profile flag was stale but DB has active subscriptions
       const existingActiveSubscription = await SubscriptionModel.findOne({ student: userId, status: 'active' });
       if (existingActiveSubscription) {
+        studentProfile.subscriptionActive = false;
+        await studentProfile.save();
         return res.status(400).json({ message: "You already have an active subscription. You cannot check out another plan until you opt out of the current one." });
       }
 
       const subtotalKes = Number(monthlyTemplate.main.price || 0);
       if (subtotalKes <= 0) {
+        studentProfile.subscriptionActive = false;
+        await studentProfile.save();
         return res.status(400).json({ message: "Subscription plan total cost must be greater than 0" });
       }
 
       // 1. Lock subscription funds using the Escrow Service (Stellar token locking is mirrored inside)
-      const lockResult = await escrowService.lockSubscriptionFunds(userId, subtotalKes, null);
-
-      // 2. Create the Subscriptions in MongoDB
-      const Student = require('../models/Student');
-      const studentProfile = await Student.findOne({ user: userId }).populate('deliveryLocation');
-      
-      if (studentProfile) {
-        studentProfile.subscriptionActive = true;
+      let lockResult;
+      try {
+        lockResult = await escrowService.lockSubscriptionFunds(userId, subtotalKes, null);
+      } catch (lockErr) {
+        studentProfile.subscriptionActive = false;
         await studentProfile.save();
+        return res.status(500).json({ message: "Escrow funds locking failed: " + lockErr.message });
       }
 
       // Create an active Subscription record

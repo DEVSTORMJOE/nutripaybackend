@@ -9,6 +9,43 @@ function getEnv(key, defaultValue = "") {
   return val.replace(/['"]/g, "").trim();
 }
 
+// Dynamically generate Audit Reserve and Fee Reserve keys if they don't exist
+const fs = require('fs');
+const path = require('path');
+
+let auditReservePublic = getEnv('STELLAR_AUDIT_RESERVE_PUBLIC');
+let auditReserveSecret = getEnv('STELLAR_AUDIT_RESERVE_SECRET');
+let feeReservePublic = getEnv('STELLAR_FEE_RESERVE_PUBLIC');
+let feeReserveSecret = getEnv('STELLAR_FEE_RESERVE_SECRET');
+
+if (!auditReservePublic || !auditReserveSecret || !feeReservePublic || !feeReserveSecret) {
+  console.log("[Stellar Platform Initialization] Creating missing Audit Reserve / Fee Reserve keys...");
+  const envPath = path.join(__dirname, '../.env');
+  let appendContent = '\n# Dynamic Reserve Keys for Production Readiness\n';
+
+  if (!auditReservePublic || !auditReserveSecret) {
+    const pair = Keypair.random();
+    auditReservePublic = pair.publicKey();
+    auditReserveSecret = pair.secret();
+    appendContent += `STELLAR_AUDIT_RESERVE_PUBLIC=${auditReservePublic}\nSTELLAR_AUDIT_RESERVE_SECRET=${auditReserveSecret}\n`;
+    process.env.STELLAR_AUDIT_RESERVE_PUBLIC = auditReservePublic;
+    process.env.STELLAR_AUDIT_RESERVE_SECRET = auditReserveSecret;
+  }
+  if (!feeReservePublic || !feeReserveSecret) {
+    const pair = Keypair.random();
+    feeReservePublic = pair.publicKey();
+    feeReserveSecret = pair.secret();
+    appendContent += `STELLAR_FEE_RESERVE_PUBLIC=${feeReservePublic}\nSTELLAR_FEE_RESERVE_SECRET=${feeReserveSecret}\n`;
+    process.env.STELLAR_FEE_RESERVE_PUBLIC = feeReservePublic;
+    process.env.STELLAR_FEE_RESERVE_SECRET = feeReserveSecret;
+  }
+
+  if (fs.existsSync(envPath)) {
+    fs.appendFileSync(envPath, appendContent);
+    console.log("[Stellar Platform Initialization] Persisted reserve keys to backend .env");
+  }
+}
+
 // Horizon URL & Network Passphrase Configuration
 const HORIZON_URL = getEnv('HORIZON_URL', 'https://horizon-testnet.stellar.org');
 const NETWORK_PASSPHRASE = getEnv('NETWORK_PASSPHRASE', Networks.TESTNET);
@@ -36,6 +73,14 @@ const platformWallets = {
   revenue: {
     public: getEnv('REVENUE_PUBLIC_KEY') || getEnv('STELLAR_REVENUE_PUBLIC'),
     secret: getEnv('REVENUE_SECRET_KEY') || getEnv('STELLAR_REVENUE_SECRET'),
+  },
+  auditReserve: {
+    public: getEnv('STELLAR_AUDIT_RESERVE_PUBLIC') || getEnv('AUDIT_RESERVE_PUBLIC_KEY'),
+    secret: getEnv('STELLAR_AUDIT_RESERVE_SECRET') || getEnv('AUDIT_RESERVE_SECRET_KEY'),
+  },
+  feeReserve: {
+    public: getEnv('STELLAR_FEE_RESERVE_PUBLIC') || getEnv('FEE_RESERVE_PUBLIC_KEY'),
+    secret: getEnv('STELLAR_FEE_RESERVE_SECRET') || getEnv('FEE_RESERVE_SECRET_KEY'),
   }
 };
 

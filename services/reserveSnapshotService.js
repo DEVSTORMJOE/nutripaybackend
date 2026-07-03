@@ -21,11 +21,13 @@ async function takeReserveSnapshot() {
     const discrepancyEscrow = Number((db.escrow - stellar.escrow).toFixed(2));
     const discrepancyVendor = Number((db.vendorSettlement - stellar.vendorSettlement).toFixed(2));
     const discrepancyRevenue = Number((db.revenue - stellar.revenue).toFixed(2));
+    const discrepancyAuditReserve = Number((db.auditReserve - stellar.auditReserve).toFixed(2));
 
     const isMatch = Math.abs(discrepancyTreasury) < 1.0 && 
                     Math.abs(discrepancyEscrow) < 1.0 && 
                     Math.abs(discrepancyVendor) < 1.0 && 
-                    Math.abs(discrepancyRevenue) < 1.0;
+                    Math.abs(discrepancyRevenue) < 1.0 &&
+                    Math.abs(discrepancyAuditReserve) < 1.0;
 
     // 3. Persist the snapshot in MongoDB
     const snapshot = await ReserveSnapshot.create({
@@ -33,16 +35,20 @@ async function takeReserveSnapshot() {
       escrowNT: stellar.escrow,
       vendorSettlementNT: stellar.vendorSettlement,
       revenueNT: stellar.revenue,
+      auditReserveNT: stellar.auditReserve,
+      feeReserveXLM: stellar.feeReserveXLM,
 
       mongodbAvailableKES: db.treasury,
       mongodbLockedKES: db.escrow,
       mongodbVendorSettlementKES: db.vendorSettlement,
       mongodbRevenueKES: db.revenue,
+      mongodbAuditReserveKES: db.auditReserve,
 
       discrepancyTreasury,
       discrepancyEscrow,
       discrepancyVendor,
       discrepancyRevenue,
+      discrepancyAuditReserve,
       status: isMatch ? 'match' : 'discrepancy'
     });
 

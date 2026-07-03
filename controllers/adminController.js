@@ -1158,12 +1158,15 @@ const handleRefundApproval = async (req, res) => {
   const { status, rejectionReason } = req.body; // status: 'approved' or 'rejected'
 
   try {
-    // Find request if in pending_admin_approval or rejected status.
     const allowedStatuses = ['pending_admin_approval', 'rejected'];
-    const refundRequest = await RefundRequest.findOne({
-      _id: id,
-      status: { $in: allowedStatuses }
-    }).populate('student', 'name email phone')
+    let nextStatus = status === 'approved' ? 'processing' : (status === 'rejected' ? 'rejected' : 'pending_admin_approval');
+
+    // SECURITY HARDENING: Atomic state transitions to prevent concurrent execution races (Double Refund mitigation)
+    const refundRequest = await RefundRequest.findOneAndUpdate(
+      { _id: id, status: { $in: allowedStatuses } },
+      { $set: { status: nextStatus } },
+      { new: true }
+    ).populate('student', 'name email phone')
      .populate('sponsor', 'name email');
 
     if (!refundRequest) {
@@ -1189,7 +1192,6 @@ const handleRefundApproval = async (req, res) => {
 
     // Case 1: Changing status back to pending_admin_approval
     if (status === 'pending_admin_approval') {
-      refundRequest.status = 'pending_admin_approval';
       refundRequest.rejectionReason = '';
       await refundRequest.save();
 
@@ -1204,10 +1206,6 @@ const handleRefundApproval = async (req, res) => {
         refundRequest
       });
     }
-
-    // Case 2: Transition to processing or rejected
-    refundRequest.status = status === 'approved' ? 'processing' : 'rejected';
-    await refundRequest.save();
 
     if (status === 'approved') {
       // Get student's wallet

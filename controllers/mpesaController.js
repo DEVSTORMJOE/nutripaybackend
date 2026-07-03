@@ -336,6 +336,26 @@ const mpesaCallback = async (req, res) => {
             // Successfully paid standard deposit!
             const { amountPaid, mpesaReceiptNumber, phonePaidFrom } = callbackVerification;
 
+            // 1. REPLAY ATTACK PREVENTION: Check if deposit record was already completed
+            if (depositRecord && depositRecord.status === 'completed') {
+                console.warn(`[REPLAY DETECTED] Webhook replayed for CheckoutRequestID ${checkoutRequestID}. Already completed.`);
+                return { response: { ResponseCode: "0", ResponseDesc: "Already processed" }, needsMint: false };
+            }
+
+            // 2. REPLAY ATTACK PREVENTION: Check if PaymentReference (mpesaReceiptNumber) was already processed
+            if (mpesaReceiptNumber) {
+                const existingTx = await Transaction.findOne({
+                    $or: [
+                        { description: { $regex: mpesaReceiptNumber, $options: 'i' } },
+                        { paymentReference: mpesaReceiptNumber }
+                    ]
+                });
+                if (existingTx) {
+                    console.warn(`[REPLAY DETECTED] Webhook replayed. Payment reference/receipt ${mpesaReceiptNumber} already used.`);
+                    return { response: { ResponseCode: "0", ResponseDesc: "Duplicate reference" }, needsMint: false };
+                }
+            }
+
             if (depositRecord) {
                 depositRecord.status = 'completed';
                 depositRecord.receiptNumber = mpesaReceiptNumber;

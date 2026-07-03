@@ -49,6 +49,22 @@ const reserveSnapshotSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.Decimal128,
     default: "0.00"
   },
+  auditReserveNT: {
+    type: mongoose.Schema.Types.Decimal128,
+    default: "0.00"
+  },
+  mongodbAuditReserveKES: {
+    type: mongoose.Schema.Types.Decimal128,
+    default: "0.00"
+  },
+  discrepancyAuditReserve: {
+    type: mongoose.Schema.Types.Decimal128,
+    default: "0.00"
+  },
+  feeReserveXLM: {
+    type: mongoose.Schema.Types.Decimal128,
+    default: "0.00"
+  },
   status: {
     type: String,
     enum: ['match', 'discrepancy'],

@@ -172,6 +172,7 @@ app.use("/api/ndash", require("./routes/ndashRoutes"));
 app.use("/api/upload", require("./routes/uploadRoutes"));
 app.use("/api/support", require("./routes/supportRoutes"));
 app.use("/api/faqs", require("./routes/faqRoutes"));
+app.use("/api/admin/audit", require("./routes/auditRoutes"));
 /* =========================
    BASIC ROUTE
    ========================= */

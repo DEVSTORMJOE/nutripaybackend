@@ -30,6 +30,14 @@ const platformWallets = {
   revenue: {
     public: process.env.STELLAR_REVENUE_PUBLIC || process.env.REVENUE_PUBLIC_KEY,
     secret: process.env.STELLAR_REVENUE_SECRET || process.env.REVENUE_SECRET_KEY
+  },
+  auditReserve: {
+    public: process.env.STELLAR_AUDIT_RESERVE_PUBLIC || process.env.AUDIT_RESERVE_PUBLIC_KEY,
+    secret: process.env.STELLAR_AUDIT_RESERVE_SECRET || process.env.AUDIT_RESERVE_SECRET_KEY
+  },
+  feeReserve: {
+    public: process.env.STELLAR_FEE_RESERVE_PUBLIC || process.env.FEE_RESERVE_PUBLIC_KEY,
+    secret: process.env.STELLAR_FEE_RESERVE_SECRET || process.env.FEE_RESERVE_SECRET_KEY
   }
 };
 
@@ -174,10 +182,12 @@ async function revokeTrustline(targetPublicKey) {
  */
 async function bootstrapPlatformTrustlines() {
   const wallets = [
-    { name: 'Treasury', secret: platformWallets.treasury.secret, public: platformWallets.treasury.public },
-    { name: 'Escrow', secret: platformWallets.escrow.secret, public: platformWallets.escrow.public },
-    { name: 'Vendor Settlement', secret: platformWallets.vendorSettlement.secret, public: platformWallets.vendorSettlement.public },
-    { name: 'Revenue', secret: platformWallets.revenue.secret, public: platformWallets.revenue.public }
+    { name: 'Treasury', secret: platformWallets.treasury.secret, public: platformWallets.treasury.public, needsTrustline: true },
+    { name: 'Escrow', secret: platformWallets.escrow.secret, public: platformWallets.escrow.public, needsTrustline: true },
+    { name: 'Vendor Settlement', secret: platformWallets.vendorSettlement.secret, public: platformWallets.vendorSettlement.public, needsTrustline: true },
+    { name: 'Revenue', secret: platformWallets.revenue.secret, public: platformWallets.revenue.public, needsTrustline: true },
+    { name: 'Audit Reserve', secret: platformWallets.auditReserve.secret, public: platformWallets.auditReserve.public, needsTrustline: true },
+    { name: 'Fee Reserve', secret: platformWallets.feeReserve.secret, public: platformWallets.feeReserve.public, needsTrustline: false }
   ];
 
   const results = [];
@@ -207,6 +217,19 @@ async function bootstrapPlatformTrustlines() {
       } else {
         throw err;
       }
+    }
+
+    if (!w.needsTrustline) {
+      results.push({
+        name: w.name,
+        public: w.public,
+        trustlineExisted: false,
+        trustlineCreated: false,
+        authorizedExisted: false,
+        authorizedCreated: false,
+        balance: 'XLM-Only'
+      });
+      continue;
     }
 
     const state = await checkTrustline(w.public);
@@ -250,7 +273,9 @@ async function getSecurityStatus() {
     { name: 'Treasury', public: platformWallets.treasury.public },
     { name: 'Escrow', public: platformWallets.escrow.public },
     { name: 'Vendor Settlement', public: platformWallets.vendorSettlement.public },
-    { name: 'Revenue', public: platformWallets.revenue.public }
+    { name: 'Revenue', public: platformWallets.revenue.public },
+    { name: 'Audit Reserve', public: platformWallets.auditReserve.public },
+    { name: 'Fee Reserve', public: platformWallets.feeReserve.public, isFeeReserve: true }
   ];
 
   let issuerFlags = { auth_required: false, auth_revocable: false };
@@ -272,6 +297,30 @@ async function getSecurityStatus() {
         authorized: true,
         balance: 'N/A'
       });
+      continue;
+    }
+
+    if (w.isFeeReserve) {
+      try {
+        const acc = await server.loadAccount(w.public);
+        const native = acc.balances.find(b => b.asset_type === 'native');
+        reports.push({
+          name: w.name,
+          publicKey: w.public,
+          trustlineExists: false,
+          authorized: true,
+          balance: native ? `${native.balance} XLM` : '0 XLM'
+        });
+      } catch (err) {
+        reports.push({
+          name: w.name,
+          publicKey: w.public,
+          trustlineExists: false,
+          authorized: false,
+          balance: 'Error',
+          error: err.message
+        });
+      }
       continue;
     }
 

@@ -76,11 +76,32 @@ async function runFullReconciliation() {
     const onChainVendorSettlementNT = await getOnChainNTBalance(platformPublics.vendorSettlement.public);
     const onChainRevenueNT = await getOnChainNTBalance(platformPublics.revenue.public);
 
+    // Expected Audit Reserve: sum of isolated funds in active/investigating cases
+    const AuditCase = require('../models/AuditCase');
+    const activeCases = await AuditCase.find({ status: { $ne: 'Resolved' } });
+    let dbAuditReserveKES = activeCases.reduce((sum, c) => sum + (c.isolatedAmountKES || 0), 0);
+    dbAuditReserveKES = Number(dbAuditReserveKES.toFixed(2));
+
+    const onChainAuditReserveNT = await getOnChainNTBalance(platformPublics.auditReserve.public);
+
+    // Fee Reserve XLM balance query
+    let onChainFeeReserveXLM = 0;
+    if (platformPublics.feeReserve.public) {
+      try {
+        const acc = await server.loadAccount(platformPublics.feeReserve.public);
+        const native = acc.balances.find(b => b.asset_type === 'native');
+        onChainFeeReserveXLM = native ? parseFloat(native.balance) : 0;
+      } catch (err) {
+        console.error("Failed to query fee reserve balance in reconciliation:", err.message);
+      }
+    }
+
     // 3. Perform Reserve Accuracy Audits
     const treasuryDiff = Math.abs(dbTreasuryKES - onChainTreasuryNT);
     const escrowDiff = Math.abs(dbEscrowKES - onChainEscrowNT);
     const vendorDiff = Math.abs(dbVendorSettlementKES - onChainVendorSettlementNT);
     const revenueDiff = Math.abs(dbRevenueKES - onChainRevenueNT);
+    const auditReserveDiff = Math.abs(dbAuditReserveKES - onChainAuditReserveNT);
 
     const checkPassed = (diff) => diff < 1.0; // Enforce tolerance within 1 KES due to rounding splits
 
@@ -105,13 +126,25 @@ async function runFullReconciliation() {
     console.log(`   - MongoDB Ledger:   ${dbRevenueKES.toFixed(2)} KES`);
     console.log(`   - Stellar Proof:    ${onChainRevenueNT.toFixed(2)} NT`);
     console.log(`   - Status:           ${checkPassed(revenueDiff) ? '✅ MATCH' : '⚠️ DISCREPANCY (' + (dbRevenueKES - onChainRevenueNT).toFixed(2) + ')'}`);
+    console.log("-----------------------------------------------------------------------");
+    console.log(`🛡️  Audit Reserve (Isolated Funds):`);
+    console.log(`   - MongoDB Cases:    ${dbAuditReserveKES.toFixed(2)} KES`);
+    console.log(`   - Stellar Proof:    ${onChainAuditReserveNT.toFixed(2)} NT`);
+    console.log(`   - Status:           ${checkPassed(auditReserveDiff) ? '✅ MATCH' : '⚠️ DISCREPANCY (' + (dbAuditReserveKES - onChainAuditReserveNT).toFixed(2) + ')'}`);
+    console.log("-----------------------------------------------------------------------");
+    console.log(`⛽ Fee Reserve (Network Gas Pool):`);
+    console.log(`   - Stellar Balance:  ${onChainFeeReserveXLM.toFixed(4)} XLM`);
     console.log("=======================================================================");
 
-    const overallSuccess = checkPassed(treasuryDiff) && checkPassed(escrowDiff) && checkPassed(vendorDiff) && checkPassed(revenueDiff);
+    const overallSuccess = checkPassed(treasuryDiff) && 
+                           checkPassed(escrowDiff) && 
+                           checkPassed(vendorDiff) && 
+                           checkPassed(revenueDiff) &&
+                           checkPassed(auditReserveDiff);
     return {
       success: overallSuccess,
-      db: { treasury: dbTreasuryKES, escrow: dbEscrowKES, vendorSettlement: dbVendorSettlementKES, revenue: dbRevenueKES },
-      stellar: { treasury: onChainTreasuryNT, escrow: onChainEscrowNT, vendorSettlement: onChainVendorSettlementNT, revenue: onChainRevenueNT }
+      db: { treasury: dbTreasuryKES, escrow: dbEscrowKES, vendorSettlement: dbVendorSettlementKES, revenue: dbRevenueKES, auditReserve: dbAuditReserveKES },
+      stellar: { treasury: onChainTreasuryNT, escrow: onChainEscrowNT, vendorSettlement: onChainVendorSettlementNT, revenue: onChainRevenueNT, auditReserve: onChainAuditReserveNT, feeReserveXLM: onChainFeeReserveXLM }
     };
 
   } catch (error) {
