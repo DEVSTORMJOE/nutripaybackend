@@ -104,7 +104,18 @@ const protect = async (req, res, next) => {
 
   // 1. Try app JWT first
   try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const jwtKeys = require("../config/jwtKeys");
+    let secret = process.env.JWT_SECRET;
+    try {
+      const decodedHeader = jwt.decode(token, { complete: true });
+      if (decodedHeader?.header?.kid) {
+        secret = jwtKeys.getSecret(decodedHeader.header.kid);
+      }
+    } catch (decodeErr) {
+      // decode failed, fallback to default secret
+    }
+
+    const decoded = jwt.verify(token, secret);
 
     const userId = decoded.id || decoded._id || decoded.sub;
 

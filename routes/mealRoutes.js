@@ -20,7 +20,9 @@
 // server/routes/mealRoutes.js
 const express = require("express");
 const router = express.Router();
+const { generalLimiter } = require("../middleware/rateLimiters");
 
+router.use(generalLimiter);
 
 const { listMeals, createMeal, updateMeal, setMealActive, deleteMeal, getWeeklyPlans, shuffleWeeklyPlan } = require("../controllers/mealController");
 const { getSettings } = require("../controllers/adminController");

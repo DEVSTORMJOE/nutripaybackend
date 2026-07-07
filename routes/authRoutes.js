@@ -67,17 +67,23 @@ const {
   me,
   completeProfile,
   sendSponsorOTP,
-  verifySponsorOTP
+  verifySponsorOTP,
+  refresh,
+  logout
 } = require("../controllers/authController");
 
 const { protect } = require("../middleware/authMiddleware");
+const { authLimiter } = require("../middleware/rateLimiters");
 
-router.post("/register", register);
-router.post("/login", login);
-router.post("/firebase", firebaseAuth);
-router.post("/change-password", changePassword);
-router.post("/sponsor/send-otp", sendSponsorOTP);
-router.post("/sponsor/verify-otp", verifySponsorOTP);
+router.post("/register", authLimiter, register);
+router.post("/login", authLimiter, login);
+router.post("/firebase", authLimiter, firebaseAuth);
+router.post("/change-password", authLimiter, changePassword);
+router.post("/sponsor/send-otp", authLimiter, sendSponsorOTP);
+router.post("/sponsor/verify-otp", authLimiter, verifySponsorOTP);
+
+router.post("/refresh", refresh);
+router.post("/logout", logout);
 
 router.get("/me", protect, me);
 
