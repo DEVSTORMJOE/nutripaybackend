@@ -20,23 +20,6 @@ async function lockSubscriptionFunds(studentId, amountKes, sponsorId = null, ses
   // Lock locally (deducts from available buckets, credits locked balance, saves, and updates tokenBalanceNT)
   const studentWallet = await walletService.lockFunds(studentId, amountKes, session);
 
-  // Settle on-chain (Treasury -> Escrow in NT)
-  let stellarTxHash = "";
-  let settlementStatus = "pending";
-  try {
-    stellarTxHash = await stellarTreasuryService.settleToEscrow(amountKes);
-    settlementStatus = "synced";
-  } catch (err) {
-    console.error("Critical Stellar escrow lock failed. Logged locally, marked failed for retry queue:", err.message);
-    settlementStatus = "failed";
-    const errorLogger = require('../utils/errorLogger');
-    await errorLogger.logError('escrow', `Stellar escrow lock failed for student subscription funding. KES: ${amountKes}`, {
-      studentId,
-      amountKES: amountKes,
-      error: err.message
-    }, 'error');
-  }
-
   // Create subscription lock transaction for user & admin audit trail
   const txOpts = session ? { session } : {};
   const txId = crypto.randomUUID();
@@ -49,11 +32,36 @@ async function lockSubscriptionFunds(studentId, amountKes, sponsorId = null, ses
     paymentMethod: 'wallet',
     paymentSource: sponsorId ? 'sponsor_funds' : 'student_wallet',
     orderType: 'subscription',
-    stellarTxHash: stellarTxHash || null,
+    stellarTxHash: null,
     status: 'completed',
-    settlementStatus: settlementStatus,
+    settlementStatus: 'pending',
     description: 'Meal Plan Subscription Processed'
   }], txOpts);
+
+  // Queue on-chain transaction asynchronously
+  try {
+    const queueService = require('./queueService');
+    await queueService.addStellarJob('subscription_lock', lockTx[0]._id, { amountKES: amountKes });
+  } catch (queueErr) {
+    console.error("[Escrow Service] Failed to queue escrow lock job. Running fallback synchronous process:", queueErr.message);
+    try {
+      const stellarTxHash = await stellarTreasuryService.settleToEscrow(amountKes);
+      await Transaction.findByIdAndUpdate(lockTx[0]._id, {
+        $set: { stellarTxHash, settlementStatus: 'synced' }
+      });
+    } catch (fallbackErr) {
+      console.error("[Escrow Service] Fallback synchronous escrow lock failed:", fallbackErr.message);
+      await Transaction.findByIdAndUpdate(lockTx[0]._id, {
+        $set: { settlementStatus: 'failed' }
+      });
+      const errorLogger = require('../utils/errorLogger');
+      await errorLogger.logError('escrow', `Stellar escrow lock failed for student subscription funding. KES: ${amountKes}`, {
+        studentId,
+        amountKES: amountKes,
+        error: fallbackErr.message
+      }, 'error');
+    }
+  }
 
   // Ledger log for escrow lock
   try {
@@ -337,23 +345,6 @@ async function calculateRefund(deliveryIds, studentId, session = null) {
     );
   }
 
-  // Stellar Settlement: Escrow -> Treasury (reversing locked funds on-chain using NT token)
-  let stellarTxHash = "";
-  let settlementStatus = "pending";
-  try {
-    stellarTxHash = await stellarTreasuryService.reverseSettlement(totalRefundKes);
-    settlementStatus = "synced";
-  } catch (err) {
-    console.error("Stellar refund reverse settlement failed. Marked failed for retry queue:", err.message);
-    settlementStatus = "failed";
-    const errorLogger = require('../utils/errorLogger');
-    await errorLogger.logError('escrow', `Stellar reverse settlement failed for refund. KES: ${totalRefundKes}`, {
-      studentId,
-      totalRefundKes,
-      error: err.message
-    }, 'error');
-  }
-
   // Record refund transaction log
   const txDocs = [{
     transactionId: crypto.randomUUID(),
@@ -363,14 +354,41 @@ async function calculateRefund(deliveryIds, studentId, session = null) {
     transactionCategory: 'refund',
     paymentMethod: 'wallet',
     status: 'completed',
-    settlementStatus: settlementStatus,
-    stellarTxHash: stellarTxHash || null,
+    settlementStatus: 'pending',
+    stellarTxHash: null,
     description: `Refund for cancelled/opt-out deliveries`
   }];
+  
+  let refundTxs;
   if (session) {
-    await Transaction.create(txDocs, { session });
+    refundTxs = await Transaction.create(txDocs, { session });
   } else {
-    await Transaction.create(txDocs);
+    refundTxs = await Transaction.create(txDocs);
+  }
+
+  // Queue on-chain transaction asynchronously
+  try {
+    const queueService = require('./queueService');
+    await queueService.addStellarJob('refund', refundTxs[0]._id, { amountKES: totalRefundKes });
+  } catch (queueErr) {
+    console.error("[Escrow Service] Failed to queue refund job. Running fallback synchronous process:", queueErr.message);
+    try {
+      const stellarTxHash = await stellarTreasuryService.reverseSettlement(totalRefundKes);
+      await Transaction.findByIdAndUpdate(refundTxs[0]._id, {
+        $set: { stellarTxHash, settlementStatus: 'synced' }
+      });
+    } catch (fallbackErr) {
+      console.error("[Escrow Service] Fallback synchronous refund failed:", fallbackErr.message);
+      await Transaction.findByIdAndUpdate(refundTxs[0]._id, {
+        $set: { settlementStatus: 'failed' }
+      });
+      const errorLogger = require('../utils/errorLogger');
+      await errorLogger.logError('escrow', `Stellar reverse settlement failed for refund. KES: ${totalRefundKes}`, {
+        studentId,
+        totalRefundKes,
+        error: fallbackErr.message
+      }, 'error');
+    }
   }
 
   // Update delivery statuses to cancelled

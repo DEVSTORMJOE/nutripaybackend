@@ -1,13 +1,13 @@
 const Transaction = require('../models/Transaction');
-const stellarTreasuryService = require('./stellarTreasuryService');
+const queueService = require('./queueService');
 const cron = require('node-cron');
 
 /**
  * Scans MongoDB for any Transaction with settlementStatus === 'failed'
- * and attempts to re-execute their corresponding on-chain Stellar operations.
+ * and pushes them to the Queue Service for safe, self-healing processing.
  */
 async function retryFailedSettlements() {
-  console.log("[Reconciliation Worker] Starting failed Stellar settlements retry job...");
+  console.log("[Reconciliation Worker] Starting failed settlements reconciliation job...");
   
   try {
     const failedTxs = await Transaction.find({ settlementStatus: 'failed' }).limit(50);
@@ -17,76 +17,47 @@ async function retryFailedSettlements() {
       return { retried: 0, successful: 0 };
     }
 
-    console.log(`[Reconciliation Worker] Found ${failedTxs.length} failed transactions to retry.`);
+    console.log(`[Reconciliation Worker] Found ${failedTxs.length} failed transactions. Enqueuing for execution...`);
 
-    let successfulCount = 0;
+    let enqueuedCount = 0;
 
     for (let tx of failedTxs) {
       try {
-        console.log(`[Reconciliation Worker] Retrying transaction ${tx.transactionId} (${tx.transactionCategory}) for amount ${tx.amountKES} KES...`);
+        console.log(`[Reconciliation Worker] Enqueuing transaction ${tx.transactionId} (${tx.transactionCategory}) for retry.`);
         
-        let newTxHash = "";
-        
-        switch (tx.transactionCategory) {
-          case 'deposit':
-          case 'mpesa_direct_order':
-            newTxHash = await stellarTreasuryService.mintNT(tx.amountKES);
-            break;
-            
-          case 'subscription_lock':
-            newTxHash = await stellarTreasuryService.settleToEscrow(tx.amountKES);
-            break;
-            
-          case 'escrow_release':
-            newTxHash = await stellarTreasuryService.releaseVendorSettlement(tx.amountKES);
-            break;
-            
-          case 'commission':
-            newTxHash = await stellarTreasuryService.recordRevenue(tx.amountKES);
-            break;
-            
-          case 'refund':
-            newTxHash = await stellarTreasuryService.reverseSettlement(tx.amountKES);
-            break;
-            
-          case 'withdrawal':
-            newTxHash = await stellarTreasuryService.moveVendorToTreasury(tx.amountKES);
-            break;
-            
-          default:
-            console.warn(`[Reconciliation Worker] Unknown or unhandled category "${tx.transactionCategory}" for transaction ${tx._id}. Skipping.`);
-            continue;
-        }
+        // Mark as pending first so the cron won't select it again if it runs before completion
+        tx.settlementStatus = 'pending';
+        await tx.save();
 
-        if (newTxHash) {
-          tx.stellarTxHash = newTxHash;
-          tx.settlementStatus = 'synced';
-          await tx.save();
-          successfulCount++;
-          console.log(`[Reconciliation Worker] Successfully synced transaction ${tx.transactionId}! Hash: ${newTxHash}`);
-        }
+        await queueService.addStellarJob(tx.transactionCategory, tx._id, {
+          amountKES: parseFloat(tx.amountKES ? tx.amountKES.toString() : '0')
+        });
 
+        enqueuedCount++;
       } catch (err) {
-        console.error(`[Reconciliation Worker] Retry failed for transaction ${tx.transactionId}: ${err.message}`);
+        console.error(`[Reconciliation Worker] Failed to enqueue transaction ${tx.transactionId}: ${err.message}`);
+        // Reset state to failed so it can be picked up later
+        tx.settlementStatus = 'failed';
+        await tx.save();
       }
     }
 
-    console.log(`[Reconciliation Worker] Retry job finished. Retried: ${failedTxs.length}, Successfully Synced: ${successfulCount}`);
-    return { retried: failedTxs.length, successful: successfulCount };
+    console.log(`[Reconciliation Worker] Reconciliation job finished. Enqueued: ${enqueuedCount}/${failedTxs.length}`);
+    return { retried: failedTxs.length, enqueued: enqueuedCount };
 
   } catch (error) {
-    console.error("[Reconciliation Worker] Error during failed settlements retry job:", error);
+    console.error("[Reconciliation Worker] Error during failed settlements reconciliation job:", error);
     throw error;
   }
 }
 
-// Automatically schedule the retry job every hour in production
+// Automatically schedule the reconciliation job once a day in production (running at midnight)
 if (process.env.NODE_ENV !== 'test') {
-  cron.schedule('0 * * * *', async () => {
+  cron.schedule('0 0 * * *', async () => {
     try {
       await retryFailedSettlements();
     } catch (e) {
-      console.error("Scheduled failed settlements retry job failed:", e);
+      console.error("Scheduled reconciliation job failed:", e);
     }
   });
 }

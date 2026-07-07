@@ -6,12 +6,19 @@ const Transaction = require('../models/Transaction');
 const Vendor = require('../models/Vendor');
 const User = require('../models/User');
 const stellarService = require('../services/stellarService');
+const cacheService = require('../services/cacheService');
 
 // @desc    Get vendor dashboard stats
 // @route   GET /api/vendor/dashboard
 // @access  Private (Vendor)
 const getDashboard = async (req, res) => {
   try {
+    const cacheKey = `vendor:dashboard:${req.user.id}`;
+    const cachedData = await cacheService.get(cacheKey);
+    if (cachedData) {
+      return res.json(cachedData);
+    }
+
     const vendorRecord = await Vendor.findOne({ user: req.user.id });
     if (!vendorRecord) return res.status(404).json({ message: 'Vendor profile not found' });
 
@@ -42,11 +49,14 @@ const getDashboard = async (req, res) => {
       console.error("Failed to fetch live Stellar balance, falling back to MongoDB cache:", stellarError);
     }
 
-    res.json({
+    const dashboardData = {
       activePlans: plans,
       activeSubscriptions: activeSubs,
       balance
-    });
+    };
+
+    await cacheService.set(cacheKey, dashboardData, 300); // Cache for 5 minutes
+    res.json(dashboardData);
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: 'Server Error' });
@@ -73,6 +83,10 @@ const createMeal = async (req, res) => {
       nutrition,
       currency: currency || "KES"
     });
+
+    // Invalidate caches
+    await cacheService.delPattern("meals:*");
+    await cacheService.del(`vendor:dashboard:${req.user.id}`);
 
     res.status(201).json(meal);
   } catch (error) {

@@ -1,5 +1,6 @@
 // server/controllers/faqController.js
 const FAQ = require("../models/FAQ");
+const cacheService = require("../services/cacheService");
 
 // Automatic Seeding of Mock FAQs if database collection is empty
 const seedMockFAQs = async () => {
@@ -96,11 +97,20 @@ seedMockFAQs();
 // Public: lists all FAQs sorted by order and category
 exports.listFAQs = async (req, res) => {
   try {
+    const category = req.query.category || 'all';
+    const cacheKey = `faqs:list:${category}`;
+    const cachedData = await cacheService.get(cacheKey);
+    if (cachedData) {
+      return res.json(cachedData);
+    }
+
     const query = {};
     if (req.query.category) {
       query.category = req.query.category;
     }
     const faqs = await FAQ.find(query).sort({ order: 1, createdAt: 1 });
+    
+    await cacheService.set(cacheKey, faqs, 3600); // Cache for 1 hour
     res.json(faqs);
   } catch (error) {
     console.error("Failed to list FAQs:", error);
@@ -124,6 +134,7 @@ exports.createFAQ = async (req, res) => {
       order: Number(order || 0),
     });
 
+    await cacheService.delPattern("faqs:*");
     res.status(201).json({ ok: true, item: doc });
   } catch (error) {
     console.error("Failed to create FAQ:", error);
@@ -155,6 +166,7 @@ exports.updateFAQ = async (req, res) => {
       return res.status(404).json({ error: "FAQ not found." });
     }
 
+    await cacheService.delPattern("faqs:*");
     res.json({ ok: true, item: doc });
   } catch (error) {
     console.error("Failed to update FAQ:", error);
@@ -173,6 +185,7 @@ exports.deleteFAQ = async (req, res) => {
     if (!doc) {
       return res.status(404).json({ error: "FAQ not found." });
     }
+    await cacheService.delPattern("faqs:*");
     res.json({ ok: true, message: "FAQ deleted successfully." });
   } catch (error) {
     console.error("Failed to delete FAQ:", error);

@@ -31,6 +31,7 @@
 const Meal = require("../models/Meal");
 const WeeklyPlan = require("../models/WeeklyPlan");
 const cloudinary = require("../config/cloudinary");
+const cacheService = require("../services/cacheService");
 
 /**
  * Extract a Cloudinary public_id from a Cloudinary URL.
@@ -62,6 +63,12 @@ function extractCloudinaryPublicId(url) {
 async function listMeals(req, res) {
   try {
     const active = req.query.active;
+    const cacheKey = `meals:list:active-${active || 'all'}`;
+    const cachedData = await cacheService.get(cacheKey);
+    if (cachedData) {
+      return res.json(cachedData);
+    }
+
     const q = { approvalStatus: "approved" };
     if (active === "true") q.isActive = true;
 
@@ -72,6 +79,8 @@ async function listMeals(req, res) {
       })
       .sort({ createdAt: -1 })
       .lean();
+
+    await cacheService.set(cacheKey, items, 600); // Cache for 10 minutes
     return res.json(items);
   } catch (e) {
     console.error("Error in listMeals:", e);
@@ -132,6 +141,7 @@ async function createMeal(req, res) {
       approvalStatus: "approved", // Admin-created meals are auto-approved
     });
 
+    await cacheService.delPattern("meals:*");
     return res.status(201).json(created.toObject());
   } catch (e) {
     console.error("Error in createMeal:", e);
@@ -174,6 +184,7 @@ async function updateMeal(req, res) {
     const updated = await Meal.findByIdAndUpdate(id, patch, { new: true }).lean();
     if (!updated) return res.status(404).json({ message: "Meal not found" });
 
+    await cacheService.delPattern("meals:*");
     return res.json(updated);
   } catch (e) {
     console.error("Error in updateMeal:", e);
@@ -189,6 +200,7 @@ async function setMealActive(req, res) {
     const updated = await Meal.findByIdAndUpdate(id, { isActive }, { new: true }).lean();
     if (!updated) return res.status(404).json({ message: "Meal not found" });
 
+    await cacheService.delPattern("meals:*");
     return res.json(updated);
   } catch (e) {
     console.error("Error in setMealActive:", e);
@@ -218,6 +230,7 @@ async function deleteMeal(req, res) {
     // Hard-delete the DB record
     await Meal.findByIdAndDelete(id);
 
+    await cacheService.delPattern("meals:*");
     return res.json({ ok: true, message: "Meal deleted successfully" });
   } catch (e) {
     console.error("Error in deleteMeal:", e);

@@ -257,4 +257,11 @@ server.listen(PORT, () => {
   } catch (err) {
     console.error("Failed to start student withdrawal scheduler:", err);
   }
+
+  // Start background queue worker
+  try {
+    require('./workers/stellarQueueWorker');
+  } catch (err) {
+    console.error("Failed to start background queue worker:", err);
+  }
 });

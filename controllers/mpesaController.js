@@ -6,6 +6,7 @@ const walletService = require('../services/walletService');
 const stellarTreasuryService = require('../services/stellarTreasuryService');
 const crypto = require('crypto');
 const { runInTransaction } = require('../utils/transactionHelper');
+const queueService = require('../services/queueService');
 
 // Start M-Pesa STK Push
 const mpesaDeposit = async (req, res) => {
@@ -397,30 +398,44 @@ const mpesaCallback = async (req, res) => {
         // After transaction session completes successfully, trigger on-chain minting outside the session block!
         if (result && result.needsMint) {
             const { amount, transactionToUpdate, mpesaReceiptNumber, customOrderId, vendorId, userId: notifyUserId } = result;
-            let stellarTxHash = "";
-            let settlementStatus = "pending";
+            
             try {
-                stellarTxHash = await stellarTreasuryService.mintNT(amount);
-                settlementStatus = "synced";
-                console.log(`✅ On-chain minting succeeded. Hash: ${stellarTxHash}`);
-            } catch (err) {
-                console.error("❌ On-chain minting failed. Marked for retry queue:", err.message);
-                settlementStatus = "failed";
-            }
-
-            try {
-                if (transactionToUpdate) {
-                    await Transaction.findByIdAndUpdate(transactionToUpdate, {
-                        $set: { stellarTxHash: stellarTxHash || null, settlementStatus }
-                    });
-                } else if (mpesaReceiptNumber) {
-                    await Transaction.updateMany(
-                        { description: { $regex: mpesaReceiptNumber, $options: 'i' } },
-                        { $set: { stellarTxHash: stellarTxHash || null, settlementStatus } }
-                    );
+                let txId = transactionToUpdate;
+                if (!txId && mpesaReceiptNumber) {
+                    const foundTx = await Transaction.findOne({ description: { $regex: mpesaReceiptNumber, $options: 'i' } });
+                    if (foundTx) txId = foundTx._id;
                 }
-            } catch (updateErr) {
-                console.error("Failed to update transaction settlement details:", updateErr.message);
+
+                if (txId) {
+                    // Update to pending first to show it's in the queue
+                    await Transaction.findByIdAndUpdate(txId, { $set: { settlementStatus: 'pending' } });
+                    
+                    // Queue the minting job!
+                    await queueService.addStellarJob('mpesa_direct_order', txId, { amountKES: amount });
+                    console.log(`[Mpesa Controller] Enqueued mint job for transaction ${txId}`);
+                } else {
+                    console.warn(`[Mpesa Controller] Could not find transaction associated with receipt ${mpesaReceiptNumber} to queue.`);
+                }
+            } catch (queueErr) {
+                console.error("[Mpesa Controller] Failed to enqueue on-chain minting job:", queueErr.message);
+                
+                // Fallback to old behavior: run mintNT synchronously
+                try {
+                    console.log("[Mpesa Controller] Running synchronous mint fallback...");
+                    const stellarTxHash = await stellarTreasuryService.mintNT(amount);
+                    if (transactionToUpdate) {
+                        await Transaction.findByIdAndUpdate(transactionToUpdate, {
+                            $set: { stellarTxHash, settlementStatus: 'synced' }
+                        });
+                    }
+                } catch (fallbackErr) {
+                    console.error("[Mpesa Controller] Fallback synchronous mint failed:", fallbackErr.message);
+                    if (transactionToUpdate) {
+                        await Transaction.findByIdAndUpdate(transactionToUpdate, {
+                            $set: { settlementStatus: 'failed' }
+                        });
+                    }
+                }
             }
 
             if (customOrderId && vendorId) {
