@@ -3,7 +3,7 @@ const PushSubscription = require('../models/PushSubscription');
 
 let vapidPublicKey = process.env.VAPID_PUBLIC_KEY;
 let vapidPrivateKey = process.env.VAPID_PRIVATE_KEY;
-const vapidEmail = process.env.VAPID_EMAIL || 'mailto:admin@nutripay.com';
+const vapidEmail = process.env.VAPID_EMAIL || 'mailto:nutripayorg@gmail.com';
 
 if (!vapidPublicKey || !vapidPrivateKey) {
   console.warn("⚠️ VAPID keys missing in environment variables. Generating temporary VAPID keys...");
