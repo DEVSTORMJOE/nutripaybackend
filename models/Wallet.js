@@ -37,7 +37,7 @@ const walletSchema = new mongoose.Schema({
   },
   walletType: {
     type: String,
-    enum: ['student', 'sponsor', 'vendor', 'admin'],
+    enum: ['student', 'sponsor', 'vendor', 'admin', 'delivery'],
     required: true
   },
   availableBalanceKES: {

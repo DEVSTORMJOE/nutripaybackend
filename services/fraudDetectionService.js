@@ -44,7 +44,9 @@ async function runFraudDetectionChecks() {
           description: `Student user requested ${group.count} refunds within a 24-hour period.`,
           detectedRules: ['Refund Abuse'],
           user: group._id,
-          status: 'Open'
+          status: 'Open',
+          riskScore: Math.min(95, 60 + group.count * 10),
+          severity: group.count >= 5 ? 'CRITICAL' : 'HIGH'
         });
         results.refundAbusesDetected++;
       }
@@ -64,10 +66,6 @@ async function runFraudDetectionChecks() {
       if (!group._id) continue;
       
       const hasCountAbuse = group.count >= 3;
-      const singleLargeWithdrawal = await WithdrawalRequest.findOne({
-        user: group._id,
-        createdAt: { $gte: oneDayAgo }
-      });
       
       // Convert Decimal128 to float safely
       let hasValueAbuse = false;
@@ -91,7 +89,9 @@ async function runFraudDetectionChecks() {
               : `User requested a single high-value withdrawal >= 10,000 KES.`,
             detectedRules: ['Withdrawal Abuse'],
             user: group._id,
-            status: 'Open'
+            status: 'Open',
+            riskScore: hasValueAbuse ? 92 : 82,
+            severity: 'CRITICAL'
           });
           results.withdrawalAbusesDetected++;
         }
@@ -103,17 +103,6 @@ async function runFraudDetectionChecks() {
 
   // 3. Detect Sponsor Abuse (funding loop cycles, e.g. Sponsor -> Student -> Vendor -> Sponsor)
   try {
-    // Look at transaction logs over past 7 days
-    const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-    const txs = await Transaction.find({
-      status: 'completed',
-      createdAt: { $gte: sevenDaysAgo }
-    }).populate('fromUser').populate('toUser');
-
-    // Build paths to detect if Vendor paid Sponsor, or Sponsor funded Student, etc.
-    // A simple loop heuristic: check if Sponsor A -> funded Student B, and Student B ordered from Vendor C,
-    // and Vendor C withdrew funds to Sponsor A's bank/M-Pesa details.
-    // We can also flag if multiple Sponsor accounts are linked to the same student profile
     const studentsWithMultipleSponsors = await Student.aggregate([
       { $match: { sponsorId: { $ne: null } } },
       { $group: { _id: "$user", sponsors: { $addToSet: "$sponsorId" } } }
@@ -130,7 +119,9 @@ async function runFraudDetectionChecks() {
             description: `Student user account is associated with ${item.sponsors.length} different sponsor accounts.`,
             detectedRules: ['Sponsor Abuse'],
             user: item._id,
-            status: 'Open'
+            status: 'Open',
+            riskScore: 90,
+            severity: 'CRITICAL'
           });
           results.sponsorAbusesDetected++;
         }
@@ -166,7 +157,9 @@ async function runFraudDetectionChecks() {
             user: d.student,
             vendor: d.vendor,
             transaction: d._id,
-            status: 'Open'
+            status: 'Open',
+            riskScore: 85,
+            severity: 'HIGH'
           });
           results.deliveryAbusesDetected++;
         }
@@ -194,7 +187,9 @@ async function runFraudDetectionChecks() {
               description: `Vendor cancellation rate is at ${(cancellationRate * 100).toFixed(1)}% (${cancelled} cancelled out of ${totalDeliveries} orders).`,
               detectedRules: ['Vendor Abuse'],
               vendor: v._id,
-              status: 'Open'
+              status: 'Open',
+              riskScore: 72,
+              severity: 'MEDIUM'
             });
             results.vendorAbusesDetected++;
           }

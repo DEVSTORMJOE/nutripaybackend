@@ -3,6 +3,7 @@ const router = express.Router();
 const {
   getAuditDashboard,
   getAuditCases,
+  getFraudCenterStats,
   handleCaseAction,
   getSnapshots,
   takeManualSnapshot,
@@ -17,6 +18,7 @@ const { role } = require('../middleware/roleMiddleware');
 // Mount routes with protect and role('admin') filters
 router.get('/dashboard', protect, role('admin'), getAuditDashboard);
 router.get('/cases', protect, role('admin'), getAuditCases);
+router.get('/fraud-stats', protect, role('admin'), getFraudCenterStats);
 router.post('/cases/:id/action', protect, role('admin'), handleCaseAction);
 router.get('/snapshots', protect, role('admin'), getSnapshots);
 router.post('/snapshots/take', protect, role('admin'), takeManualSnapshot);

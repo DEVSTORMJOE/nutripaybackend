@@ -85,13 +85,24 @@ async function lockSubscriptionFunds(studentId, amountKes, sponsorId = null, ses
  * Release proportional daily payout for completed delivery: Escrow -> Vendor and Escrow -> Revenue on Stellar (NT)
  */
 async function releaseDailyVendorPayment(deliveryId, session = null) {
+  // Reconciliation lock: atomic state update to prevent concurrent double releases
   const delivery = session
-    ? await Delivery.findById(deliveryId).session(session)
-    : await Delivery.findById(deliveryId);
-  if (!delivery) throw new Error("Delivery not found");
-  
-  // Reconciliation lock: check paymentReleased flag
-  if (delivery.paymentReleased) return { alreadyReleased: true };
+    ? await Delivery.findOneAndUpdate(
+        { _id: deliveryId, paymentReleased: { $ne: true } },
+        { $set: { paymentReleased: true } },
+        { new: true }
+      ).session(session)
+    : await Delivery.findOneAndUpdate(
+        { _id: deliveryId, paymentReleased: { $ne: true } },
+        { $set: { paymentReleased: true } },
+        { new: true }
+      );
+
+  if (!delivery) {
+    const existing = await Delivery.findById(deliveryId);
+    if (!existing) throw new Error("Delivery not found");
+    return { alreadyReleased: true };
+  }
 
   const totalCost = Number(delivery.totalCost || 0);
   if (totalCost <= 0) return { freeOrder: true };

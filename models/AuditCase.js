@@ -17,8 +17,23 @@ const auditCaseSchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ['Open', 'Investigating', 'Resolved', 'Escalated'],
+    enum: ['Open', 'Investigating', 'Resolved', 'Escalated', 'Ignored'],
     default: 'Open'
+  },
+  riskScore: {
+    type: Number,
+    default: 50,
+    min: 0,
+    max: 100
+  },
+  severity: {
+    type: String,
+    enum: ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'],
+    default: 'MEDIUM'
+  },
+  assignedInvestigator: {
+    type: String,
+    default: 'Unassigned'
   },
   detectedRules: {
     type: [String],

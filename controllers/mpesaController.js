@@ -337,9 +337,23 @@ const mpesaCallback = async (req, res) => {
             // Successfully paid standard deposit!
             const { amountPaid, mpesaReceiptNumber, phonePaidFrom } = callbackVerification;
 
-            // 1. REPLAY ATTACK PREVENTION: Check if deposit record was already completed
-            if (depositRecord && depositRecord.status === 'completed') {
-                console.warn(`[REPLAY DETECTED] Webhook replayed for CheckoutRequestID ${checkoutRequestID}. Already completed.`);
+            // 1. REPLAY ATTACK PREVENTION: Atomic state transition on MpesaDeposit
+            if (session) {
+                depositRecord = await MpesaDeposit.findOneAndUpdate(
+                    { checkoutRequestID, status: 'pending' },
+                    { $set: { status: 'completed', receiptNumber: mpesaReceiptNumber } },
+                    { new: true }
+                ).session(session);
+            } else {
+                depositRecord = await MpesaDeposit.findOneAndUpdate(
+                    { checkoutRequestID, status: 'pending' },
+                    { $set: { status: 'completed', receiptNumber: mpesaReceiptNumber } },
+                    { new: true }
+                );
+            }
+
+            if (!depositRecord) {
+                console.warn(`[REPLAY DETECTED] Webhook replayed for CheckoutRequestID ${checkoutRequestID}. Already completed or invalid.`);
                 return { response: { ResponseCode: "0", ResponseDesc: "Already processed" }, needsMint: false };
             }
 
@@ -355,14 +369,6 @@ const mpesaCallback = async (req, res) => {
                     console.warn(`[REPLAY DETECTED] Webhook replayed. Payment reference/receipt ${mpesaReceiptNumber} already used.`);
                     return { response: { ResponseCode: "0", ResponseDesc: "Duplicate reference" }, needsMint: false };
                 }
-            }
-
-            if (depositRecord) {
-                depositRecord.status = 'completed';
-                depositRecord.receiptNumber = mpesaReceiptNumber;
-                await depositRecord.save(session ? { session } : {});
-            } else {
-                console.warn(`Webhook received for CheckoutRequestID ${checkoutRequestID} but no pending deposit found in DB.`);
             }
 
             const extraFields = {

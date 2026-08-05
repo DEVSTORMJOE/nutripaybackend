@@ -136,7 +136,7 @@ const handleCaseAction = async (req, res) => {
 
     if (action === 'status_change') {
       const { status } = req.body;
-      if (!['Open', 'Investigating', 'Resolved', 'Escalated'].includes(status)) {
+      if (!['Open', 'Investigating', 'Resolved', 'Escalated', 'Ignored'].includes(status)) {
         return res.status(400).json({ message: "Invalid status value" });
       }
       auditCase.status = status;
@@ -144,6 +144,14 @@ const handleCaseAction = async (req, res) => {
       await auditCase.save();
       await logAuditEvent(req.user.id, 'Fraud Actions', 'AuditCase', [id], { action: 'status_change', newStatus: status }, req);
       return res.json({ message: `Case status changed to ${status}`, auditCase });
+    }
+
+    if (action === 'assign_investigator') {
+      const { investigator } = req.body;
+      auditCase.assignedInvestigator = investigator || req.user.email;
+      auditCase.auditTrail.push({ action: 'investigator_assigned', details: { investigator: auditCase.assignedInvestigator }, timestamp: new Date() });
+      await auditCase.save();
+      return res.json({ message: `Investigator assigned to ${auditCase.assignedInvestigator}`, auditCase });
     }
 
     if (action === 'freeze_user') {
@@ -353,9 +361,131 @@ const runFeeCheck = async (req, res) => {
   }
 };
 
+/**
+ * GET /api/admin/audit/fraud-stats
+ * Aggregates SOC Fraud Center statistics, anomaly breakdown, and high-risk signals
+ */
+const getFraudCenterStats = async (req, res) => {
+  try {
+    const now = new Date();
+    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const startOfWeek = new Date(now);
+    startOfWeek.setDate(now.getDate() - 7);
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+
+    // Anomaly Counts by Time Window
+    const dailyAnomalies = await AuditCase.countDocuments({ createdAt: { $gte: startOfToday } });
+    const weeklyAnomalies = await AuditCase.countDocuments({ createdAt: { $gte: startOfWeek } });
+    const monthlyAnomalies = await AuditCase.countDocuments({ createdAt: { $gte: startOfMonth } });
+
+    // Status Counts
+    const openCases = await AuditCase.countDocuments({ status: 'Open' });
+    const investigatingCases = await AuditCase.countDocuments({ status: 'Investigating' });
+    const resolvedCases = await AuditCase.countDocuments({ status: 'Resolved' });
+    const ignoredCases = await AuditCase.countDocuments({ status: 'Ignored' });
+    const escalatedCases = await AuditCase.countDocuments({ status: 'Escalated' });
+
+    // Total Isolated Assets KES
+    const isolatedAgg = await AuditCase.aggregate([
+      { $match: { isolatedAmountKES: { $gt: 0 } } },
+      { $group: { _id: null, total: { $sum: "$isolatedAmountKES" } } }
+    ]);
+    const totalIsolatedAssetsKES = isolatedAgg[0]?.total || 0;
+
+    // Severity Breakdown
+    const criticalCount = await AuditCase.countDocuments({ severity: 'CRITICAL', status: { $ne: 'Resolved' } });
+    const highCount = await AuditCase.countDocuments({ severity: 'HIGH', status: { $ne: 'Resolved' } });
+    const mediumCount = await AuditCase.countDocuments({ severity: 'MEDIUM', status: { $ne: 'Resolved' } });
+    const lowCount = await AuditCase.countDocuments({ severity: 'LOW', status: { $ne: 'Resolved' } });
+
+    // Rule Category Distribution
+    const ruleDistribution = await AuditCase.aggregate([
+      { $unwind: "$detectedRules" },
+      { $group: { _id: "$detectedRules", count: { $sum: 1 } } }
+    ]);
+
+    // Top Suspicious Users
+    const suspiciousUsersAgg = await AuditCase.aggregate([
+      { $match: { user: { $ne: null } } },
+      { $group: { _id: "$user", caseCount: { $sum: 1 }, maxRiskScore: { $max: "$riskScore" } } },
+      { $sort: { maxRiskScore: -1, caseCount: -1 } },
+      { $limit: 5 }
+    ]);
+    await User.populate(suspiciousUsersAgg, { path: '_id', select: 'name email role isApproved' });
+
+    // Top Suspicious Vendors
+    const suspiciousVendorsAgg = await AuditCase.aggregate([
+      { $match: { vendor: { $ne: null } } },
+      { $group: { _id: "$vendor", caseCount: { $sum: 1 }, maxRiskScore: { $max: "$riskScore" } } },
+      { $sort: { maxRiskScore: -1, caseCount: -1 } },
+      { $limit: 5 }
+    ]);
+    await Vendor.populate(suspiciousVendorsAgg, { path: '_id', select: 'businessName approvedStatus' });
+
+    // Top Suspicious Wallets
+    const suspiciousWallets = await Wallet.find({ status: { $in: ['frozen', 'suspended'] } })
+      .limit(5)
+      .populate('user', 'name email role')
+      .lean();
+
+    // High-Risk Signals & Largest Transactions
+    const largestTxs = await Transaction.find({ status: 'completed' })
+      .sort({ amountKES: -1 })
+      .limit(5)
+      .populate('fromUser', 'name email')
+      .populate('toUser', 'name email')
+      .lean();
+
+    const repeatedRefunds = await RefundRequest.aggregate([
+      { $group: { _id: "$student", count: { $sum: 1 }, totalAmount: { $sum: "$amountKES" } } },
+      { $match: { count: { $gte: 2 } } },
+      { $sort: { count: -1 } },
+      { $limit: 5 }
+    ]);
+    await User.populate(repeatedRefunds, { path: '_id', select: 'name email' });
+
+    const repeatedWithdrawals = await WithdrawalRequest.aggregate([
+      { $group: { _id: "$user", count: { $sum: 1 } } },
+      { $match: { count: { $gte: 2 } } },
+      { $sort: { count: -1 } },
+      { $limit: 5 }
+    ]);
+    await User.populate(repeatedWithdrawals, { path: '_id', select: 'name email' });
+
+    res.json({
+      counters: {
+        dailyAnomalies,
+        weeklyAnomalies,
+        monthlyAnomalies,
+        openCases,
+        investigatingCases,
+        resolvedCases,
+        ignoredCases,
+        escalatedCases,
+        totalIsolatedAssetsKES,
+        criticalCount,
+        highCount,
+        mediumCount,
+        lowCount
+      },
+      ruleDistribution,
+      suspiciousUsers: suspiciousUsersAgg.map(u => ({ user: u._id, caseCount: u.caseCount, riskScore: u.maxRiskScore || 85 })),
+      suspiciousVendors: suspiciousVendorsAgg.map(v => ({ vendor: v._id, caseCount: v.caseCount, riskScore: v.maxRiskScore || 75 })),
+      suspiciousWallets,
+      largestTxs,
+      repeatedRefunds,
+      repeatedWithdrawals
+    });
+  } catch (error) {
+    console.error("Fraud center stats error:", error);
+    res.status(500).json({ message: "Failed to load fraud center stats: " + error.message });
+  }
+};
+
 module.exports = {
   getAuditDashboard,
   getAuditCases,
+  getFraudCenterStats,
   handleCaseAction,
   getSnapshots,
   takeManualSnapshot,

@@ -320,13 +320,12 @@ const donateDelivery = async (req, res) => {
   const { deliveryId } = req.body;
   try {
     const studentId = req.user.id;
-    const delivery = await Delivery.findOne({ _id: deliveryId, student: studentId, status: 'pending' });
+    const delivery = await Delivery.findOneAndUpdate(
+      { _id: deliveryId, student: studentId, status: 'pending' },
+      { $set: { status: 'donated', isDonated: true, originalStudent: studentId } },
+      { new: true }
+    );
     if (!delivery) return res.status(404).json({ message: "Pending delivery not found or already processed." });
-
-    delivery.status = 'donated';
-    delivery.isDonated = true;
-    delivery.originalStudent = studentId;
-    await delivery.save();
 
     res.json({ success: true, message: "Your meal has been donated to the public Donation Box! Thank you for your kindness." });
   } catch (e) {
@@ -359,25 +358,28 @@ const claimDonatedMeal = async (req, res) => {
   const { deliveryId } = req.body;
   try {
     const studentId = req.user.id;
-    const delivery = await Delivery.findOne({ _id: deliveryId, status: 'donated' });
-    if (!delivery) return res.status(404).json({ message: "Donated meal not found or already claimed." });
 
-    if (delivery.originalStudent.toString() === studentId) {
+    // Verify non-original student check upfront
+    const targetMeal = await Delivery.findById(deliveryId);
+    if (!targetMeal) return res.status(404).json({ message: "Donated meal not found or already claimed." });
+    if (targetMeal.originalStudent && targetMeal.originalStudent.toString() === studentId) {
       return res.status(400).json({ message: "You cannot claim your own donated meal." });
     }
 
-    delivery.student = studentId;
-    delivery.status = 'pending';
-    delivery.claimedAt = new Date();
-    
+    const delivery = await Delivery.findOneAndUpdate(
+      { _id: deliveryId, status: 'donated' },
+      { $set: { student: studentId, status: 'pending', claimedAt: new Date() } },
+      { new: true }
+    );
+    if (!delivery) return res.status(404).json({ message: "Donated meal not found or already claimed." });
+
     // Assign location to claimant's student profile campus/hostel
     const Student = require('../models/Student');
     const claimantProfile = await Student.findOne({ user: studentId }).populate('deliveryLocation');
     if (claimantProfile && claimantProfile.deliveryLocation) {
       delivery.location = claimantProfile.deliveryLocation.name || 'Campus';
+      await delivery.save();
     }
-
-    await delivery.save();
 
     res.json({ success: true, message: "Meal successfully claimed! It has been scheduled for your delivery." });
   } catch (e) {
@@ -426,8 +428,12 @@ const shuffleMeal = async (req, res) => {
     // Count how many deliveries currently scheduled on this day & slot have the original meal
     const originalMealName = delivery.items?.[0]?.name;
     if (originalMealName) {
+      const dDate = new Date(delivery.scheduledDate);
+      const startOfDay = new Date(dDate); startOfDay.setHours(0,0,0,0);
+      const endOfDay = new Date(dDate); endOfDay.setHours(23,59,59,999);
+
       const currentOriginalMealCount = await Delivery.countDocuments({
-        scheduledDate: delivery.scheduledDate,
+        scheduledDate: { $gte: startOfDay, $lte: endOfDay },
         timeSlot: delivery.timeSlot,
         status: 'pending',
         "items.name": originalMealName

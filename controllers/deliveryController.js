@@ -182,6 +182,7 @@ const getAssignedDeliveries = async (req, res) => {
         path: "vendor",
         populate: { path: "user", select: "name email phone" },
       })
+      .sort({ scheduledDate: -1, createdAt: -1 })
       .lean();
 
     // ✅ Enrich each delivery with the Student profile (hostel, block, floor, room, landmark, instructions)
@@ -420,7 +421,11 @@ const getDeliveryHistory = async (req, res) => {
     const deliveries = await Delivery.find({
       deliveryAgent: req.user.id,
       status: "delivered",
-    });
+    })
+      .populate("student", "name email phone")
+      .populate("deliveryLocation")
+      .sort({ deliveredAt: -1, createdAt: -1 })
+      .lean();
 
     res.json(deliveries);
   } catch (error) {
