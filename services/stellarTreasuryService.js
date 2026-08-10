@@ -2,94 +2,53 @@ const StellarSdk = require('stellar-sdk');
 const { Horizon, Keypair, TransactionBuilder, Operation, Asset, Networks, BASE_FEE } = require('stellar-sdk');
 require('dotenv').config();
 
-// Helper to safely fetch environment variables and strip any potential surrounding quotes
-function getEnv(key, defaultValue = "") {
-  const val = process.env[key];
-  if (!val) return defaultValue;
-  return val.replace(/['"]/g, "").trim();
-}
+const { server, HORIZON_URL, NETWORK_PASSPHRASE, getEnv } = require('../config/stellarConfig');
 
-// Dynamically generate Audit Reserve and Fee Reserve keys if they don't exist
-const fs = require('fs');
-const path = require('path');
-
-let auditReservePublic = getEnv('STELLAR_AUDIT_RESERVE_PUBLIC');
-let auditReserveSecret = getEnv('STELLAR_AUDIT_RESERVE_SECRET');
-let feeReservePublic = getEnv('STELLAR_FEE_RESERVE_PUBLIC');
-let feeReserveSecret = getEnv('STELLAR_FEE_RESERVE_SECRET');
-
-if (!auditReservePublic || !auditReserveSecret || !feeReservePublic || !feeReserveSecret) {
-  console.log("[Stellar Platform Initialization] Creating missing Audit Reserve / Fee Reserve keys...");
-  const envPath = path.join(__dirname, '../.env');
-  let appendContent = '\n# Dynamic Reserve Keys for Production Readiness\n';
-
-  if (!auditReservePublic || !auditReserveSecret) {
-    const pair = Keypair.random();
-    auditReservePublic = pair.publicKey();
-    auditReserveSecret = pair.secret();
-    appendContent += `STELLAR_AUDIT_RESERVE_PUBLIC=${auditReservePublic}\nSTELLAR_AUDIT_RESERVE_SECRET=${auditReserveSecret}\n`;
-    process.env.STELLAR_AUDIT_RESERVE_PUBLIC = auditReservePublic;
-    process.env.STELLAR_AUDIT_RESERVE_SECRET = auditReserveSecret;
-  }
-  if (!feeReservePublic || !feeReserveSecret) {
-    const pair = Keypair.random();
-    feeReservePublic = pair.publicKey();
-    feeReserveSecret = pair.secret();
-    appendContent += `STELLAR_FEE_RESERVE_PUBLIC=${feeReservePublic}\nSTELLAR_FEE_RESERVE_SECRET=${feeReserveSecret}\n`;
-    process.env.STELLAR_FEE_RESERVE_PUBLIC = feeReservePublic;
-    process.env.STELLAR_FEE_RESERVE_SECRET = feeReserveSecret;
-  }
-
-  if (fs.existsSync(envPath)) {
-    fs.appendFileSync(envPath, appendContent);
-    console.log("[Stellar Platform Initialization] Persisted reserve keys to backend .env");
-  }
-}
-
-// Horizon URL & Network Passphrase Configuration
-const HORIZON_URL = getEnv('HORIZON_URL', 'https://horizon-testnet.stellar.org');
-const NETWORK_PASSPHRASE = getEnv('NETWORK_PASSPHRASE', Networks.TESTNET);
-
-const server = new Horizon.Server(HORIZON_URL);
-
-// Platform Keypairs
+// Platform Keypairs (Unified STELLAR_<NAME>_PUBLIC / STELLAR_<NAME>_SECRET Naming Convention)
 const platformWallets = {
   issuer: {
-    public: getEnv('ISSUER_PUBLIC_KEY') || getEnv('STELLAR_ISSUER_PUBLIC'),
-    secret: getEnv('ISSUER_SECRET_KEY') || getEnv('STELLAR_ISSUER_SECRET'),
+    public: getEnv('STELLAR_ISSUER_PUBLIC'),
+    secret: getEnv('STELLAR_ISSUER_SECRET'),
   },
   treasury: {
-    public: getEnv('TREASURY_PUBLIC_KEY') || getEnv('STELLAR_TREASURY_PUBLIC'),
-    secret: getEnv('TREASURY_SECRET_KEY') || getEnv('STELLAR_TREASURY_SECRET'),
+    public: getEnv('STELLAR_TREASURY_PUBLIC'),
+    secret: getEnv('STELLAR_TREASURY_SECRET'),
   },
   escrow: {
-    public: getEnv('ESCROW_PUBLIC_KEY') || getEnv('STELLAR_ESCROW_PUBLIC'),
-    secret: getEnv('ESCROW_SECRET_KEY') || getEnv('STELLAR_ESCROW_SECRET'),
+    public: getEnv('STELLAR_ESCROW_PUBLIC'),
+    secret: getEnv('STELLAR_ESCROW_SECRET'),
   },
   vendorSettlement: {
-    public: getEnv('VENDOR_SETTLEMENT_PUBLIC_KEY') || getEnv('STELLAR_VENDOR_SETTLEMENT_PUBLIC'),
-    secret: getEnv('VENDOR_SETTLEMENT_SECRET_KEY') || getEnv('STELLAR_VENDOR_SETTLEMENT_SECRET'),
+    public: getEnv('STELLAR_VENDOR_SETTLEMENT_PUBLIC'),
+    secret: getEnv('STELLAR_VENDOR_SETTLEMENT_SECRET'),
   },
   revenue: {
-    public: getEnv('REVENUE_PUBLIC_KEY') || getEnv('STELLAR_REVENUE_PUBLIC'),
-    secret: getEnv('REVENUE_SECRET_KEY') || getEnv('STELLAR_REVENUE_SECRET'),
+    public: getEnv('STELLAR_REVENUE_PUBLIC'),
+    secret: getEnv('STELLAR_REVENUE_SECRET'),
   },
   auditReserve: {
-    public: getEnv('STELLAR_AUDIT_RESERVE_PUBLIC') || getEnv('AUDIT_RESERVE_PUBLIC_KEY'),
-    secret: getEnv('STELLAR_AUDIT_RESERVE_SECRET') || getEnv('AUDIT_RESERVE_SECRET_KEY'),
+    public: getEnv('STELLAR_AUDIT_RESERVE_PUBLIC'),
+    secret: getEnv('STELLAR_AUDIT_RESERVE_SECRET'),
   },
   feeReserve: {
-    public: getEnv('STELLAR_FEE_RESERVE_PUBLIC') || getEnv('FEE_RESERVE_PUBLIC_KEY'),
-    secret: getEnv('STELLAR_FEE_RESERVE_SECRET') || getEnv('FEE_RESERVE_SECRET_KEY'),
+    public: getEnv('STELLAR_FEE_RESERVE_PUBLIC'),
+    secret: getEnv('STELLAR_FEE_RESERVE_SECRET'),
   }
 };
 
-// Check if critical platform secrets are configured
+// Strict Environment Guard: Abort startup immediately if any platform wallet key is missing
+const missingKeys = [];
 Object.entries(platformWallets).forEach(([name, keys]) => {
-  if (!keys.public || !keys.secret) {
-    console.error(`❌ CRITICAL CONFIG WARNING: Platform Stellar key "${name}" is missing in .env`);
-  }
+  if (!keys.public) missingKeys.push(`${name.toUpperCase()} public key`);
+  if (!keys.secret) missingKeys.push(`${name.toUpperCase()} secret key`);
 });
+
+if (missingKeys.length > 0) {
+  console.error("❌ CRITICAL STELLAR STARTUP ERROR: Missing platform wallet keys:");
+  missingKeys.forEach(k => console.error(`   - Missing: ${k}`));
+  console.error("❌ Server startup aborted to prevent fund orphaning or unbacked state execution.");
+  throw new Error(`CRITICAL STELLAR CONFIGURATION ERROR: Missing required platform keys [${missingKeys.join(', ')}]. Server startup aborted.`);
+}
 
 // NutriToken (NT) Asset Definition (1 NT = 1 KES)
 const NUTRITOKEN_CODE = getEnv('NUTRITOKEN_CODE', 'NT');
@@ -246,7 +205,7 @@ async function reverseSettlement(amountKes) {
 }
 
 /**
- * Burn tokens/Redeem on Cash Out: Transfer from VENDOR_SETTLEMENT to TREASURY (or back to Issuer)
+ * Burn tokens/Redeem on Cash Out: Transfer from VENDOR_SETTLEMENT to TREASURY
  */
 async function moveVendorToTreasury(amountKes) {
   return performPlatformTransfer(
@@ -254,6 +213,18 @@ async function moveVendorToTreasury(amountKes) {
     platformWallets.treasury.public,
     amountKes,
     `Redeem Tokens on Withdrawal: Vendor Settlement -> Treasury`
+  );
+}
+
+/**
+ * Redeem Revenue on Platform Profit Cash Out: Transfer from REVENUE to TREASURY
+ */
+async function withdrawRevenueToTreasury(amountKes) {
+  return performPlatformTransfer(
+    platformWallets.revenue.secret,
+    platformWallets.treasury.public,
+    amountKes,
+    `Redeem Revenue Profit on Withdrawal: Revenue -> Treasury`
   );
 }
 
@@ -265,6 +236,7 @@ module.exports = {
   recordRevenue,
   reverseSettlement,
   moveVendorToTreasury,
+  withdrawRevenueToTreasury,
   platformWallets,
   NT,
   NUTRITOKEN_CODE

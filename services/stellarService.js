@@ -2,17 +2,7 @@ const StellarSdk = require('stellar-sdk');
 const { Horizon, Keypair, TransactionBuilder, Operation, Asset, Networks, BASE_FEE } = require('stellar-sdk');
 require('dotenv').config();
 
-// Initialize Stellar Server (Testnet)
-const server = new Horizon.Server('https://horizon-testnet.stellar.org');
-
-// Platform Key (Admin)
-const platformKey = process.env.PLATFORM_SECRET_KEY
-  ? Keypair.fromSecret(process.env.PLATFORM_SECRET_KEY)
-  : null;
-
-if (!platformKey) {
-  console.error("❌ CRITICAL: PLATFORM_SECRET_KEY is missing from .env");
-}
+const { server, NETWORK_PASSPHRASE, IS_TESTNET, FRIENDBOT_URL } = require('../config/stellarConfig');
 
 // Exchange Rate Logic: 1 KES = 0.05 XLM (Testnet fixed rate for demo)
 const EXCHANGE_RATE_KES_TO_XLM = 0.05;
@@ -35,11 +25,11 @@ async function createWallet(fundWithFriendbot = true) {
   try {
     const pair = Keypair.random();
 
-    if (fundWithFriendbot) {
+    // Friendbot is ONLY executed on Testnet!
+    if (fundWithFriendbot && IS_TESTNET) {
       console.log(`Requesting Friendbot funding for ${pair.publicKey()}`);
-      // In testnet, we can fund with friendbot
       try {
-        const response = await fetch(`https://friendbot.stellar.org?addr=${pair.publicKey()}`);
+        const response = await fetch(`${FRIENDBOT_URL}?addr=${pair.publicKey()}`);
         if (!response.ok) {
           throw new Error(`Friendbot failed with status ${response.status}`);
         }
@@ -49,6 +39,8 @@ async function createWallet(fundWithFriendbot = true) {
         console.error("Friendbot funding failed or timed out:", e);
         // Do not throw, allow unfunded wallet creation
       }
+    } else if (fundWithFriendbot && !IS_TESTNET) {
+      console.log(`[Stellar] Running on Mainnet. Friendbot skipped for new wallet ${pair.publicKey()}`);
     }
 
     // Return the keys, the controller will handle DB storage
@@ -88,7 +80,7 @@ async function makePayment(sourceSecret, destinationPublicKey, amountKES) {
 
     const transaction = new TransactionBuilder(account, {
       fee: BASE_FEE,
-      networkPassphrase: Networks.TESTNET
+      networkPassphrase: NETWORK_PASSPHRASE
     })
       .addOperation(Operation.payment({
         destination: destinationPublicKey,
@@ -139,6 +131,5 @@ module.exports = {
   makePayment,
   getBalance,
   KES_to_XLM,
-  XLM_to_KES,
-  platformKey
+  XLM_to_KES
 };

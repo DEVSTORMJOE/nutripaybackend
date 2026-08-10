@@ -168,12 +168,12 @@ const getProductionHealth = async (req, res) => {
     };
 
     // 15. Issuer Status Probe
-    const hasIssuerKey = !!process.env.PLATFORM_SECRET_KEY;
+    const hasIssuerKey = !!(process.env.STELLAR_ISSUER_SECRET || process.env.STELLAR_ISSUER_PUBLIC);
     const issuerStatus = {
       name: "Issuer Status",
       status: hasIssuerKey ? "operational" : "offline",
       latencyMs: 12,
-      details: hasIssuerKey ? "Stellar Platform Issuer Account Signer Active" : "Missing PLATFORM_SECRET_KEY in .env"
+      details: hasIssuerKey ? "Stellar Platform Issuer Account Signer Active" : "Missing STELLAR_ISSUER_SECRET in .env"
     };
 
     // 16. Treasury Reserve Probe

@@ -1,6 +1,7 @@
 const AuditCase = require('../models/AuditCase');
 const AuditEvent = require('../models/AuditEvent');
 const ReserveSnapshot = require('../models/ReserveSnapshot');
+const FeeReserveLog = require('../models/FeeReserveLog');
 const Wallet = require('../models/Wallet');
 const User = require('../models/User');
 const Vendor = require('../models/Vendor');
@@ -354,10 +355,68 @@ const runFraudCheck = async (req, res) => {
  */
 const runFeeCheck = async (req, res) => {
   try {
-    const report = await feeReserveService.monitorFeeReserve();
+    const report = await feeReserveService.monitorFeeReserve('MANUAL_ADMIN');
     res.json({ message: "Fee Reserve monitor checks successfully run.", report });
   } catch (error) {
     res.status(500).json({ message: "Failed to run fee checks: " + error.message });
+  }
+};
+
+/**
+ * GET /api/admin/audit/fee-logs
+ * Retrieves history of Fee Reserve operational wallet refills
+ */
+const getFeeReserveLogs = async (req, res) => {
+  try {
+    const page = parseInt(req.query.page || '1', 10);
+    const limit = parseInt(req.query.limit || '50', 10);
+    const skip = (page - 1) * limit;
+
+    const query = {};
+    if (req.query.status) {
+      query.status = req.query.status;
+    }
+    if (req.query.walletName) {
+      query.destinationWalletName = req.query.walletName;
+    }
+
+    const logs = await FeeReserveLog.find(query)
+      .sort({ timestamp: -1 })
+      .skip(skip)
+      .limit(limit);
+
+    const total = await FeeReserveLog.countDocuments(query);
+
+    res.json({
+      logs,
+      page,
+      pages: Math.ceil(total / limit),
+      total
+    });
+  } catch (error) {
+    console.error("Failed to fetch fee reserve logs:", error);
+    res.status(500).json({ message: "Failed to fetch fee reserve logs: " + error.message });
+  }
+};
+
+/**
+ * GET /api/admin/audit/fee-status
+ * Retrieves live on-chain XLM balances and health metrics for all operational wallets
+ */
+const getFeeReserveStatus = async (req, res) => {
+  try {
+    const walletStatuses = await feeReserveService.getOperationalWalletBalances();
+    res.json({
+      success: true,
+      wallets: walletStatuses,
+      feeReserveMinXLM: parseFloat(process.env.FEE_RESERVE_MIN_XLM || '20'),
+      operationalMinXLM: parseFloat(process.env.OPERATIONAL_MIN_XLM || '5'),
+      operationalTargetXLM: parseFloat(process.env.OPERATIONAL_TARGET_XLM || '15'),
+      cronSchedule: process.env.FEE_RESERVE_CRON_SCHEDULE || '0 * * * *'
+    });
+  } catch (error) {
+    console.error("Failed to fetch operational wallet fee status:", error);
+    res.status(500).json({ message: "Failed to fetch fee status: " + error.message });
   }
 };
 
@@ -492,5 +551,7 @@ module.exports = {
   exportSnapshotsCSV,
   getAuditEvents,
   runFraudCheck,
-  runFeeCheck
+  runFeeCheck,
+  getFeeReserveLogs,
+  getFeeReserveStatus
 };

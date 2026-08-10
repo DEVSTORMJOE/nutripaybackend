@@ -265,4 +265,12 @@ server.listen(PORT, () => {
   } catch (err) {
     console.error("Failed to start background queue worker:", err);
   }
+
+  // Start fee reserve auto-refilling scheduler
+  try {
+    const { startFeeReserveScheduler } = require('./services/feeReserveService');
+    startFeeReserveScheduler();
+  } catch (err) {
+    console.error("Failed to start fee reserve scheduler:", err);
+  }
 });

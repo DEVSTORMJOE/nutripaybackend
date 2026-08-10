@@ -1,10 +1,7 @@
 const Wallet = require('../models/Wallet');
 const Transaction = require('../models/Transaction');
 const stellarTreasuryService = require('./stellarTreasuryService');
-const { Horizon } = require('stellar-sdk');
-
-const HORIZON_URL = process.env.HORIZON_URL || 'https://horizon-testnet.stellar.org';
-const server = new Horizon.Server(HORIZON_URL);
+const { server } = require('../config/stellarConfig');
 const NUTRITOKEN_CODE = process.env.NUTRITOKEN_CODE || 'NT';
 const issuerPublic = stellarTreasuryService.platformWallets.issuer.public;
 

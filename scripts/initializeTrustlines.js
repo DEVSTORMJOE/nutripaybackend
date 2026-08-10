@@ -2,14 +2,19 @@ const mongoose = require('mongoose');
 const stellarTreasuryService = require('../services/stellarTreasuryService');
 require('dotenv').config();
 
-const HORIZON_URL = process.env.HORIZON_URL || 'https://horizon-testnet.stellar.org';
+const { IS_TESTNET, FRIENDBOT_URL } = require('../config/stellarConfig');
 
 async function fundAccount(publicKey, name) {
+  if (!IS_TESTNET) {
+    console.log(`ℹ️  Running on Mainnet. Friendbot is disabled. Skipping automated funding for "${name}" (${publicKey}). Ensure account is pre-funded with XLM.`);
+    return;
+  }
+
   const fetch = (...args) => import('node-fetch').then(({default: fetch}) => fetch(...args));
   console.log(`🌐 Funding platform account "${name}" (${publicKey}) via Friendbot...`);
   
   try {
-    const response = await fetch(`https://friendbot.stellar.org?addr=${publicKey}`);
+    const response = await fetch(`${FRIENDBOT_URL}?addr=${publicKey}`);
     if (response.ok) {
       console.log(`✅ Friendbot successfully funded "${name}" account!`);
       // Wait 3 seconds to ensure ledger consensus

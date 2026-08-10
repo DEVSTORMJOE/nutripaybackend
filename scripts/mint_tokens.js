@@ -13,8 +13,8 @@ const NETWORK_PASSPHRASE = getEnv('NETWORK_PASSPHRASE', 'Test SDF Network ; Octo
 const server = new Horizon.Server(HORIZON_URL);
 
 async function run() {
-  const issuerSecret = getEnv('ISSUER_SECRET_KEY');
-  const treasuryPublic = getEnv('TREASURY_PUBLIC_KEY');
+  const issuerSecret = getEnv('STELLAR_ISSUER_SECRET');
+  const treasuryPublic = getEnv('STELLAR_TREASURY_PUBLIC');
   const issuerPair = Keypair.fromSecret(issuerSecret);
   
   console.log("Issuer Public Key:", issuerPair.publicKey());

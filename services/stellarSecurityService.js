@@ -3,41 +3,39 @@ const axios = require('axios');
 const crypto = require('crypto');
 require('dotenv').config();
 
-const HORIZON_URL = process.env.HORIZON_URL || 'https://horizon-testnet.stellar.org';
-const server = new StellarSdk.Horizon.Server(HORIZON_URL);
-const NETWORK_PASSPHRASE = process.env.NETWORK_PASSPHRASE || StellarSdk.Networks.TESTNET;
+const { server, NETWORK_PASSPHRASE, IS_TESTNET, FRIENDBOT_URL } = require('../config/stellarConfig');
 
 const NT_CODE = process.env.NUTRITOKEN_CODE || 'NT';
 
-// Platform Wallets configuration from .env
+// Platform Wallets configuration from .env (Unified STELLAR_<NAME>_PUBLIC / STELLAR_<NAME>_SECRET Naming Convention)
 const platformWallets = {
   issuer: {
-    public: process.env.STELLAR_ISSUER_PUBLIC || process.env.ISSUER_PUBLIC_KEY,
-    secret: process.env.STELLAR_ISSUER_SECRET || process.env.ISSUER_SECRET_KEY
+    public: process.env.STELLAR_ISSUER_PUBLIC,
+    secret: process.env.STELLAR_ISSUER_SECRET
   },
   treasury: {
-    public: process.env.STELLAR_TREASURY_PUBLIC || process.env.TREASURY_PUBLIC_KEY,
-    secret: process.env.STELLAR_TREASURY_SECRET || process.env.TREASURY_SECRET_KEY
+    public: process.env.STELLAR_TREASURY_PUBLIC,
+    secret: process.env.STELLAR_TREASURY_SECRET
   },
   escrow: {
-    public: process.env.STELLAR_ESCROW_PUBLIC || process.env.ESCROW_PUBLIC_KEY,
-    secret: process.env.STELLAR_ESCROW_SECRET || process.env.ESCROW_SECRET_KEY
+    public: process.env.STELLAR_ESCROW_PUBLIC,
+    secret: process.env.STELLAR_ESCROW_SECRET
   },
   vendorSettlement: {
-    public: process.env.STELLAR_VENDOR_SETTLEMENT_PUBLIC || process.env.VENDOR_SETTLEMENT_PUBLIC_KEY,
-    secret: process.env.STELLAR_VENDOR_SETTLEMENT_SECRET || process.env.VENDOR_SETTLEMENT_SECRET_KEY
+    public: process.env.STELLAR_VENDOR_SETTLEMENT_PUBLIC,
+    secret: process.env.STELLAR_VENDOR_SETTLEMENT_SECRET
   },
   revenue: {
-    public: process.env.STELLAR_REVENUE_PUBLIC || process.env.REVENUE_PUBLIC_KEY,
-    secret: process.env.STELLAR_REVENUE_SECRET || process.env.REVENUE_SECRET_KEY
+    public: process.env.STELLAR_REVENUE_PUBLIC,
+    secret: process.env.STELLAR_REVENUE_SECRET
   },
   auditReserve: {
-    public: process.env.STELLAR_AUDIT_RESERVE_PUBLIC || process.env.AUDIT_RESERVE_PUBLIC_KEY,
-    secret: process.env.STELLAR_AUDIT_RESERVE_SECRET || process.env.AUDIT_RESERVE_SECRET_KEY
+    public: process.env.STELLAR_AUDIT_RESERVE_PUBLIC,
+    secret: process.env.STELLAR_AUDIT_RESERVE_SECRET
   },
   feeReserve: {
-    public: process.env.STELLAR_FEE_RESERVE_PUBLIC || process.env.FEE_RESERVE_PUBLIC_KEY,
-    secret: process.env.STELLAR_FEE_RESERVE_SECRET || process.env.FEE_RESERVE_SECRET_KEY
+    public: process.env.STELLAR_FEE_RESERVE_PUBLIC,
+    secret: process.env.STELLAR_FEE_RESERVE_SECRET
   }
 };
 
@@ -203,15 +201,21 @@ async function bootstrapPlatformTrustlines() {
       await server.loadAccount(w.public);
     } catch (err) {
       if (err.response && err.response.status === 404) {
-        console.log(`[Stellar Bootstrap] Account ${w.name} is unfunded. Funding via Friendbot...`);
-        try {
-          await axios.get(`https://friendbot.stellar.org?addr=${w.public}`);
-          console.log(`[Stellar Bootstrap] Account ${w.name} successfully funded via Friendbot.`);
-          // wait a small delay
-          await new Promise(r => setTimeout(r, 2000));
-        } catch (friendbotErr) {
-          console.error(`[Stellar Bootstrap] Friendbot funding failed for ${w.name}:`, friendbotErr.message);
-          results.push({ name: w.name, public: w.public, status: "friendbot_failed" });
+        if (IS_TESTNET) {
+          console.log(`[Stellar Bootstrap] Account ${w.name} is unfunded on Testnet. Funding via Friendbot...`);
+          try {
+            await axios.get(`${FRIENDBOT_URL}?addr=${w.public}`);
+            console.log(`[Stellar Bootstrap] Account ${w.name} successfully funded via Friendbot.`);
+            // wait a small delay
+            await new Promise(r => setTimeout(r, 2000));
+          } catch (friendbotErr) {
+            console.error(`[Stellar Bootstrap] Friendbot funding failed for ${w.name}:`, friendbotErr.message);
+            results.push({ name: w.name, public: w.public, status: "friendbot_failed" });
+            continue;
+          }
+        } else {
+          console.warn(`[Stellar Bootstrap] Account ${w.name} (${w.public}) is unfunded on Mainnet. Friendbot is disabled on Mainnet. Account must be pre-funded manually with XLM.`);
+          results.push({ name: w.name, public: w.public, status: "mainnet_unfunded_manual_funding_required" });
           continue;
         }
       } else {

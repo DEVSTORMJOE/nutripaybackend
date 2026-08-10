@@ -10,7 +10,9 @@ const {
   exportSnapshotsCSV,
   getAuditEvents,
   runFraudCheck,
-  runFeeCheck
+  runFeeCheck,
+  getFeeReserveLogs,
+  getFeeReserveStatus
 } = require('../controllers/auditController');
 const { protect } = require('../middleware/authMiddleware');
 const { role } = require('../middleware/roleMiddleware');
@@ -26,5 +28,7 @@ router.get('/snapshots/export', protect, role('admin'), exportSnapshotsCSV);
 router.get('/events', protect, role('admin'), getAuditEvents);
 router.post('/fraud-check', protect, role('admin'), runFraudCheck);
 router.post('/fee-check', protect, role('admin'), runFeeCheck);
+router.get('/fee-logs', protect, role('admin'), getFeeReserveLogs);
+router.get('/fee-status', protect, role('admin'), getFeeReserveStatus);
 
 module.exports = router;

@@ -2,3 +2,6 @@ config/firebase-service-account.json
 *.service-account.json
 firebase-service-account.json
 .env
+mainnet-wallets.json
+scripts/mainnet-wallets.json
+**/mainnet-wallets.json
