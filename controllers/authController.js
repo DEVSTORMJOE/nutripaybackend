@@ -14,7 +14,7 @@ const RefreshToken = require("../models/RefreshToken");
 function signAccessToken(userId) {
   const secret = jwtKeys.getCurrentSecret();
   return jwt.sign({ id: userId }, secret, {
-    expiresIn: "15m",
+    expiresIn: process.env.JWT_EXPIRES_IN || "24h",
     header: { kid: jwtKeys.currentKeyId }
   });
 }

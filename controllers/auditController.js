@@ -9,6 +9,7 @@ const Transaction = require('../models/Transaction');
 const Subscription = require('../models/Subscription');
 const CustomOrder = require('../models/CustomOrder');
 const RefundRequest = require('../models/RefundRequest');
+const WithdrawalRequest = require('../models/WithdrawalRequest');
 
 const reconciliationService = require('../services/reconciliationService');
 const auditReserveService = require('../services/auditReserveService');

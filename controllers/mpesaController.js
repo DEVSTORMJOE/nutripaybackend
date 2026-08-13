@@ -32,7 +32,14 @@ const mpesaDeposit = async (req, res) => {
 
             res.json({ message: "STK Push sent successfully to your phone. Waiting for PIN...", checkoutRequestID });
         } catch (err) {
-            console.warn("Direct Safaricom STK Push failed, falling back to mock deposit in demo mode:", err.message);
+            console.error("Direct Safaricom STK Push failed:", err.message);
+            
+            const isProduction = process.env.DARAJA_ENV === 'production' || (process.env.NODE_ENV === 'production' && process.env.DARAJA_ENV !== 'sandbox');
+            if (isProduction) {
+                return res.status(500).json({ message: 'M-Pesa STK Push failed: ' + (err.response?.data?.errorMessage || err.message) });
+            }
+
+            console.warn("Falling back to mock deposit in demo sandbox mode:", err.message);
             const mockID = `ws_CO_Mock_${crypto.randomBytes(8).toString('hex')}`;
             await MpesaDeposit.create({
                 user: req.user.id,
@@ -493,7 +500,8 @@ const checkMpesaStatus = async (req, res) => {
         }
 
         // Auto-approve mock deposits in sandbox/demo environment immediately upon polling
-        if (deposit.status === 'pending' && checkoutRequestID.startsWith('ws_CO_Mock_')) {
+        const isProduction = process.env.DARAJA_ENV === 'production' || (process.env.NODE_ENV === 'production' && process.env.DARAJA_ENV !== 'sandbox');
+        if (!isProduction && deposit.status === 'pending' && checkoutRequestID.startsWith('ws_CO_Mock_')) {
             console.log(`[Mock Deposit] Auto-approving mock deposit of ${deposit.amount} KES`);
             const mockReceipt = "MOCK_DEP_" + Math.random().toString(36).substring(4).toUpperCase();
             

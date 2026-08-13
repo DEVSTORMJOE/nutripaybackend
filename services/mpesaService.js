@@ -2,30 +2,62 @@ const axios = require('axios');
 const crypto = require('crypto');
 require('dotenv').config();
 
+const isProductionEnv = () => {
+    return process.env.DARAJA_ENV === 'production' || (process.env.NODE_ENV === 'production' && process.env.DARAJA_ENV !== 'sandbox');
+};
+
+const getBaseUrl = () => {
+    return isProductionEnv() ? 'https://api.safaricom.co.ke' : 'https://sandbox.safaricom.co.ke';
+};
+
+/**
+ * Format timestamp as 14-digit YYYYMMDDHHmmss for Daraja API
+ */
+function getDarajaTimestamp() {
+    const now = new Date();
+    const pad = (n) => String(n).padStart(2, '0');
+    return (
+        now.getFullYear().toString() +
+        pad(now.getMonth() + 1) +
+        pad(now.getDate()) +
+        pad(now.getHours()) +
+        pad(now.getMinutes()) +
+        pad(now.getSeconds())
+    );
+}
+
 // Retrieve Token for Safaricom
 const getSafaricomToken = async () => {
     const consumer_key = process.env.DARAJA_CONSUMER_KEY;
     const consumer_secret = process.env.DARAJA_CONSUMER_SECRET;
     
     if (!consumer_key || !consumer_secret) {
-        console.warn("Daraja consumer key or secret is missing. Mocking M-Pesa token.");
-        return "mocked_token";
+        console.warn("Daraja consumer key or secret is missing.");
+        if (!isProductionEnv()) {
+            return "mocked_token";
+        }
+        throw new Error("Missing DARAJA_CONSUMER_KEY or DARAJA_CONSUMER_SECRET in environment configuration");
     }
 
     const auth = Buffer.from(`${consumer_key}:${consumer_secret}`).toString("base64");
+    const baseUrl = getBaseUrl();
 
     try {
         const response = await axios.get(
-            `https://sandbox.safaricom.co.ke/oauth/v1/generate?grant_type=client_credentials`,
+            `${baseUrl}/oauth/v1/generate?grant_type=client_credentials`,
             {
                 headers: {
                     authorization: `Basic ${auth}`,
                 },
+                timeout: 10000
             }
         );
         return response.data.access_token;
     } catch (err) {
-        console.error("Token generation failed:", err.message);
+        console.error("Daraja token generation failed:", err.response?.data || err.message);
+        if (!isProductionEnv()) {
+            return "mocked_token";
+        }
         return null;
     }
 };
@@ -44,21 +76,25 @@ async function initiateDeposit(userId, phone, amountKes, orderType = 'monthly_su
 
     const shortcode = process.env.DARAJA_SHORTCODE || "174379";
     const passkey = process.env.DARAJA_PASSKEY || "bfb279f9aa9bdbcf158e97dd71a467cd2e0c893059b10f78e6b72ada1ed2c919";
-    const timestamp = new Date().toISOString().replace(/[^0-9]/g, "").slice(0, -3);
+    const timestamp = getDarajaTimestamp();
     const password = Buffer.from(`${shortcode}${passkey}${timestamp}`).toString("base64");
-    const callbackUrl = process.env.DARAJA_CALLBACK_URL || "https://mydomain.com/api/mpesa/callback";
+    
+    let callbackUrl = process.env.DARAJA_CALLBACK_URL || "https://api.nutripay.co.ke/api/mpesa/callback";
+    callbackUrl = callbackUrl.replace(/\/+$/, '');
 
-    const reference = orderType === 'quick_order' ? "NutriPay QuickOrder" : "NutriPay Subscription";
-    const desc = orderType === 'quick_order' ? "Quick Order Purchase" : "Monthly Subscription";
+    const reference = orderType === 'quick_order' ? "NutriOrder" : "NutriPay";
+    const desc = orderType === 'quick_order' ? "QuickOrder" : "Subscription";
+    const transactionType = process.env.DARAJA_TRANSACTION_TYPE || "CustomerPayBillOnline";
+    const partyB = process.env.DARAJA_PARTY_B || shortcode;
 
     const stkData = {
         BusinessShortCode: shortcode,
         Password: password,
         Timestamp: timestamp,
-        TransactionType: "CustomerPayBillOnline",
-        Amount: Number(amountKes),
+        TransactionType: transactionType,
+        Amount: Math.round(Number(amountKes)),
         PartyA: formattedPhone,       
-        PartyB: shortcode,   
+        PartyB: partyB,   
         PhoneNumber: formattedPhone,  
         CallBackURL: `${callbackUrl}/${userId}`, 
         AccountReference: reference,
@@ -74,13 +110,15 @@ async function initiateDeposit(userId, phone, amountKes, orderType = 'monthly_su
         };
     }
 
+    const baseUrl = getBaseUrl();
     const response = await axios.post(
-        "https://sandbox.safaricom.co.ke/mpesa/stkpush/v1/processrequest",
+        `${baseUrl}/mpesa/stkpush/v1/processrequest`,
         stkData,
         {
             headers: {
                 Authorization: `Bearer ${token}`,
             },
+            timeout: 15000
         }
     );
 
@@ -108,10 +146,12 @@ function verifyCallback(body) {
         };
     }
 
-    const meta = callbackData.CallbackMetadata.Item;
-    const amountPaid = meta.find(i => i.Name === "Amount").Value;
-    const mpesaReceiptNumber = meta.find(i => i.Name === "MpesaReceiptNumber").Value;
-    const phonePaidFrom = meta.find(i => i.Name === "PhoneNumber").Value;
+    const meta = callbackData.CallbackMetadata?.Item || [];
+    const getMetaVal = (name) => meta.find(i => i.Name === name)?.Value;
+
+    const amountPaid = getMetaVal("Amount");
+    const mpesaReceiptNumber = getMetaVal("MpesaReceiptNumber");
+    const phonePaidFrom = getMetaVal("PhoneNumber");
 
     return {
         success: true,
@@ -124,18 +164,60 @@ function verifyCallback(body) {
 }
 
 /**
- * Mock M-Pesa B2C withdrawal
+ * M-Pesa B2C withdrawal payout
  */
 async function withdrawToMpesa(phone, amountKes) {
     const { normalizePhone } = require('../utils/phoneUtils');
     const formattedPhone = normalizePhone(phone);
-    console.log(`[M-Pesa B2C Payout] Dispatched ${amountKes} KES to ${formattedPhone}.`);
-    // Sandbox or mock payout succeeds instantly
+    const initiatorName = process.env.DARAJA_INITIATOR_NAME;
+    const securityCredential = process.env.DARAJA_SECURITY_CREDENTIAL;
+
+    if (!initiatorName || !securityCredential) {
+        console.log(`[M-Pesa B2C Payout] Initiator/Security credential missing or sandbox mode. Dispatched ${amountKes} KES to ${formattedPhone} (Mock Mode).`);
+        return {
+            success: true,
+            conversationId: `B2C_Conv_${crypto.randomBytes(6).toString('hex')}`,
+            originatorConversationId: `B2C_Orig_${crypto.randomBytes(6).toString('hex')}`,
+            responseDescription: "Accept the service request successfully."
+        };
+    }
+
+    const token = await getSafaricomToken();
+    if (!token) {
+        throw new Error("Failed to generate Safaricom Auth Token for B2C withdrawal");
+    }
+
+    let callbackUrl = process.env.DARAJA_CALLBACK_URL || "https://api.nutripay.co.ke/api/mpesa/callback";
+    const baseUrl = getBaseUrl();
+    const cleanCallbackUrl = callbackUrl.replace(/\/callback.*$/, '');
+
+    const b2cData = {
+        InitiatorName: initiatorName,
+        SecurityCredential: securityCredential,
+        CommandID: process.env.DARAJA_B2C_COMMAND_ID || "BusinessPayment",
+        Amount: Math.round(Number(amountKes)),
+        PartyA: process.env.DARAJA_B2C_SHORTCODE || process.env.DARAJA_SHORTCODE,
+        PartyB: formattedPhone,
+        Remarks: "NutriPay Withdrawal",
+        QueueTimeOutURL: process.env.DARAJA_B2C_TIMEOUT_URL || `${cleanCallbackUrl}/b2c-callback`,
+        ResultURL: process.env.DARAJA_B2C_RESULT_URL || `${cleanCallbackUrl}/b2c-callback`,
+        Occasion: "Withdrawal"
+    };
+
+    const response = await axios.post(
+        `${baseUrl}/mpesa/b2c/v1/paymentrequest`,
+        b2cData,
+        {
+            headers: { Authorization: `Bearer ${token}` },
+            timeout: 20000
+        }
+    );
+
     return {
-        success: true,
-        conversationId: `B2C_Conv_${Math.random().toString(36).substring(7)}`,
-        originatorConversationId: `B2C_Orig_${Math.random().toString(36).substring(7)}`,
-        responseDescription: "Accept the service request successfully."
+        success: response.data.ResponseCode === "0",
+        conversationId: response.data.ConversationID,
+        originatorConversationId: response.data.OriginatorConversationID,
+        responseDescription: response.data.ResponseDescription
     };
 }
 
@@ -144,3 +226,4 @@ module.exports = {
     verifyCallback,
     withdrawToMpesa
 };
+

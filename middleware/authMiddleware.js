@@ -1,79 +1,4 @@
 
-
-// // middleware/authMiddleware.js
-// const jwt = require('jsonwebtoken');
-// const User = require('../models/User');
-// const admin = require('../config/firebaseAdmin');
-
-// const protect = async (req, res, next) => {
-//   let token;
-
-//   const hdr = req.headers.authorization || "";
-//   if (hdr.startsWith('Bearer')) {
-//     token = hdr.split(' ')[1];
-//   }
-
-//   if (!token) {
-//     return res.status(401).json({ message: 'Not authorized, no token' });
-//   }
-
-//   // 1) Try JWT (existing behavior)
-//   try {
-//     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-//     req.user = await User.findById(decoded.id).select('-password');
-//     if (!req.user) return res.status(401).json({ message: 'Not authorized, user not found' });
-//     return next();
-//   } catch (error) {
-//     // fall through to Firebase
-//   }
-
-//   // 2) Try Firebase ID token
-//   try {
-//     const decodedFb = await admin.auth().verifyIdToken(token);
-//     const firebaseUid = decodedFb.uid;
-
-//     if (!firebaseUid) {
-//       return res.status(401).json({ message: 'Not authorized, token failed' });
-//     }
-
-//     let user = await User.findOne({ firebaseUid }).select('-password');
-
-//     // fallback lookup by email if present (optional)
-//     if (!user && decodedFb.email) {
-//       user = await User.findOne({ email: decodedFb.email }).select('-password');
-//       if (user && !user.firebaseUid) {
-//         user.firebaseUid = firebaseUid;
-//         if (!user.avatar && decodedFb.picture) user.avatar = decodedFb.picture;
-//         if (!user.name && decodedFb.name) user.name = decodedFb.name;
-//         await user.save();
-//       }
-//     }
-
-//     // create user if missing
-//     if (!user) {
-//       user = await User.create({
-//         firebaseUid,
-//         email: decodedFb.email || `${firebaseUid}@firebase.local`,
-//         name: decodedFb.name || "User",
-//         avatar: decodedFb.picture || "",
-//         role: "student",
-//       });
-//       user = await User.findById(user._id).select('-password');
-//     }
-
-//     req.user = user;
-//     return next();
-//   } catch (error) {
-//     console.error(error);
-//     return res.status(401).json({ message: 'Not authorized, token failed' });
-//   }
-// };
-
-// module.exports = { protect };
-
-
-
-
 // middleware/authMiddleware.js
 const jwt = require("jsonwebtoken");
 const User = require("../models/User");
@@ -103,11 +28,13 @@ const protect = async (req, res, next) => {
   }
 
   // 1. Try app JWT first
+  let tokenHeaderAlg = null;
   try {
     const jwtKeys = require("../config/jwtKeys");
     let secret = process.env.JWT_SECRET;
     try {
       const decodedHeader = jwt.decode(token, { complete: true });
+      tokenHeaderAlg = decodedHeader?.header?.alg;
       if (decodedHeader?.header?.kid) {
         secret = jwtKeys.getSecret(decodedHeader.header.kid);
       }
@@ -136,7 +63,13 @@ const protect = async (req, res, next) => {
     req.user = user;
     return next();
   } catch (jwtError) {
-    // Continue and try Firebase token below.
+    // If token is explicitly an HS256 backend token whose verification failed,
+    // do not attempt Firebase RS256 verification to avoid algorithm error logs.
+    if (tokenHeaderAlg === "HS256") {
+      return res.status(401).json({
+        message: "Not authorized, token expired or invalid",
+      });
+    }
   }
 
   // 2. Try Firebase ID token
@@ -182,10 +115,14 @@ const protect = async (req, res, next) => {
     req.user = user;
     return next();
   } catch (firebaseError) {
+    const cleanMsg = firebaseError.message && firebaseError.message.includes("<html")
+      ? "Error fetching Firebase public keys or network timeout"
+      : String(firebaseError.message || "").substring(0, 150);
+
     console.error("AUTH_MIDDLEWARE_ERROR:", {
       name: firebaseError.name,
       code: firebaseError.code,
-      message: firebaseError.message,
+      message: cleanMsg,
     });
 
     return res.status(401).json({
