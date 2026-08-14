@@ -232,10 +232,10 @@ const createCustomOrder = async (req, res) => {
         deliveryLocation: deliveryLocation || user.location || 'Campus'
       });
 
-      // Safaricom Direct Sandbox STK Push
-      const mpesaService = require('../services/mpesaService');
+      // Payment gateway unified STK Push
+      const paymentGatewayService = require('../services/paymentGatewayService');
       try {
-        const data = await mpesaService.initiateDeposit(user ? user._id : 'guest', pushPhone, totalCost, 'quick_order');
+        const data = await paymentGatewayService.initiateDeposit(user ? user._id : 'guest', pushPhone, totalCost, 'quick_order');
         const safaricomID = data.CheckoutRequestID;
         customOrder.checkoutRequestID = safaricomID;
         await customOrder.save();

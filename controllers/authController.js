@@ -1,4 +1,5 @@
 // controllers/authController.js
+const crypto = require("crypto");
 const jwt = require("jsonwebtoken");
 const User = require("../models/User");
 const Student = require("../models/Student");
@@ -7,9 +8,24 @@ const Sponsor = require("../models/Sponsor");
 const DeliveryPersonnel = require("../models/DeliveryPersonnel");
 const admin = require("../config/firebaseAdmin");
 const { normalizePhone, isValidPhone } = require("../utils/phoneUtils");
+const { sendWelcomeEmail } = require("../utils/mailer");
 
 const jwtKeys = require("../config/jwtKeys");
 const RefreshToken = require("../models/RefreshToken");
+
+async function generateUniqueReferralCode() {
+  let isUnique = false;
+  let code = "";
+  while (!isUnique) {
+    const randomHex = crypto.randomBytes(3).toString("hex").toUpperCase();
+    code = `REF-${randomHex}`;
+    const existing = await User.findOne({ referralCode: code });
+    if (!existing) {
+      isUnique = true;
+    }
+  }
+  return code;
+}
 
 function signAccessToken(userId) {
   const secret = jwtKeys.getCurrentSecret();
@@ -373,6 +389,7 @@ async function register(req, res) {
     }
 
     const reviewOnly = isReviewOnlyRole(cleanRole);
+    const referralCode = await generateUniqueReferralCode();
 
     const userPayload = {
       name: cleanString(name),
@@ -381,6 +398,7 @@ async function register(req, res) {
       role: cleanRole,
       isApproved: reviewOnly ? false : true,
       requiresPasswordChange: reviewOnly ? true : false,
+      referralCode,
     };
 
     if (!reviewOnly) {
@@ -396,6 +414,13 @@ async function register(req, res) {
     });
 
     const safeUser = await User.findById(user._id).select("-password");
+
+    // Asynchronously send welcome email with referral verification code
+    sendWelcomeEmail({
+      to: safeUser.email,
+      name: safeUser.name,
+      referralCode: safeUser.referralCode,
+    }).catch((err) => console.error("[AUTH] Welcome email error:", err.message));
 
     if (reviewOnly) {
       return res.status(201).json({

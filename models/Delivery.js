@@ -20,6 +20,10 @@ const deliverySchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User'
   },
+  subscription: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Subscription'
+  },
   items: [{
     name: String,
     quantity: Number

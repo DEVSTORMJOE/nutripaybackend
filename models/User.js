@@ -84,6 +84,21 @@ const userSchema = new mongoose.Schema(
       type: Date,
       default: null,
     },
+    referralCode: {
+      type: String,
+      unique: true,
+      sparse: true,
+      index: true,
+    },
+    referredById: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Ambassador",
+      default: null,
+    },
+    referralVerifiedAt: {
+      type: Date,
+      default: null,
+    },
   },
   { timestamps: true }
 );

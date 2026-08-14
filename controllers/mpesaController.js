@@ -18,7 +18,8 @@ const mpesaDeposit = async (req, res) => {
         }
 
         try {
-            const data = await mpesaService.initiateDeposit(req.user.id, phone, amountKes);
+            const paymentGatewayService = require('../services/paymentGatewayService');
+            const data = await paymentGatewayService.initiateDeposit(req.user.id, phone, amountKes);
 
             // Save the pending transaction with the CheckoutRequestID
             const checkoutRequestID = data.CheckoutRequestID;

@@ -226,10 +226,22 @@ const fundRequest = async (req, res) => {
     let planId = 'essential';
     let startDate = new Date();
     let endDate = new Date(startDate.getTime() + 27 * 24 * 60 * 60 * 1000);
+    let billingCycle = 'monthly';
+    let durationDays = 28;
+
     if (request) {
       planId = request.planId || 'essential';
       if (request.startDate) startDate = request.startDate;
       if (request.endDate) endDate = request.endDate;
+      if (request.billingCycle) billingCycle = request.billingCycle;
+      if (billingCycle === 'weekly' || deliveries.length <= 14) {
+        billingCycle = 'weekly';
+        durationDays = 7;
+      }
+    } else if (deliveries.length <= 14) {
+      billingCycle = 'weekly';
+      durationDays = 7;
+      endDate = new Date(startDate.getTime() + (durationDays - 1) * 24 * 60 * 60 * 1000);
     }
 
     await Subscription.create({
@@ -239,7 +251,9 @@ const fundRequest = async (req, res) => {
       status: 'active',
       startDate: startDate,
       endDate: endDate,
-      totalPaidKES: totalKes
+      totalPaidKES: totalKes,
+      billingCycle: billingCycle,
+      durationDays: durationDays
     });
     
     // Also notify vendors that we actually got an order (since they were awaiting sponsor)

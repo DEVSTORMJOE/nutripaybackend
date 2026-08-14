@@ -20,3 +20,11 @@
 {"adminId":"69930543764a6fc3ce1a89a8","adminEmail":"admin@example.com","timestamp":"2026-08-05T08:49:55.981Z","ip":"127.0.0.1","amountKES":"300.00","walletId":"6a72f0d23e62bf31ff9206a8","action":"approved"}
 {"adminId":"69930543764a6fc3ce1a89a8","adminEmail":"admin@example.com","timestamp":"2026-08-05T08:51:41.085Z","ip":"127.0.0.1","amountKES":"300.00","walletId":"6a72f0d23e62bf31ff9206a8","action":"approved"}
 {"adminId":"69930543764a6fc3ce1a89a8","adminEmail":"admin@example.com","timestamp":"2026-08-05T08:52:25.985Z","ip":"127.0.0.1","amountKES":"300.00","walletId":"6a72f0d23e62bf31ff9206a8","action":"approved"}
+{"adminId":"6a7d73821dab4b478c175e56","timestamp":"2026-08-13T07:34:26.711Z","ip":"127.0.0.1","amountKES":"500.00","walletId":"6a7d73821dab4b478c175e51","action":"approved"}
+{"adminId":"6a7d73a93e445e8fe8f44c59","timestamp":"2026-08-13T07:35:05.360Z","ip":"127.0.0.1","amountKES":"500.00","walletId":"6a7d73a93e445e8fe8f44c54","action":"approved"}
+{"adminId":"6a7d73c83b516b3e2fffdbc2","timestamp":"2026-08-13T07:35:36.376Z","ip":"127.0.0.1","amountKES":"500.00","walletId":"6a7d73c83b516b3e2fffdbbe","action":"approved"}
+{"adminId":"6a7d73e1a73992dc72537300","timestamp":"2026-08-13T07:36:01.875Z","ip":"127.0.0.1","amountKES":"500.00","walletId":"6a7d73e1a73992dc725372fb","action":"approved"}
+{"adminId":"6a7d7478c516e2e40cf5d5ce","timestamp":"2026-08-13T07:38:32.357Z","ip":"127.0.0.1","amountKES":"500.00","walletId":"6a7d7478c516e2e40cf5d5ca","action":"approved"}
+{"adminId":"6a7d74a225cca87844caa7aa","timestamp":"2026-08-13T07:39:14.190Z","ip":"127.0.0.1","amountKES":"500.00","walletId":"6a7d74a225cca87844caa7a5","action":"approved"}
+{"adminId":"6a7d74d9d6763f1b203626bf","timestamp":"2026-08-13T07:40:09.691Z","ip":"127.0.0.1","amountKES":"500.00","walletId":"6a7d74d9d6763f1b203626ba","action":"approved"}
+{"adminId":"6a7d759961e8f2ccb998537d","timestamp":"2026-08-13T07:43:21.308Z","ip":"127.0.0.1","amountKES":"500.00","walletId":"6a7d759961e8f2ccb9985373","action":"approved"}

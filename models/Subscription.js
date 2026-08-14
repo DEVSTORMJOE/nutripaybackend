@@ -36,6 +36,15 @@ const subscriptionSchema = new mongoose.Schema({
     type: String,
     enum: ['active', 'cancelled', 'expired'],
     default: 'active'
+  },
+  billingCycle: {
+    type: String,
+    enum: ['monthly', 'weekly'],
+    default: 'monthly'
+  },
+  durationDays: {
+    type: Number,
+    default: 28
   }
 }, { timestamps: true });
 

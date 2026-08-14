@@ -1,0 +1,28 @@
+=== PAYHERO & MULTI-GATEWAY SYSTEM INTENSE TEST SUITE ===
+
+[2026-08-13T07:57:38.969Z] Connecting to MongoDB database...
+[2026-08-13T07:57:39.018Z] ✅ Connected to MongoDB.
+[2026-08-13T07:57:39.138Z] 
+--- TEST 1: Default / Explicit M-Pesa Gateway Routing ---
+[2026-08-13T07:57:39.188Z] Active Gateway retrieved: 'mpesa'
+[2026-08-13T07:57:39.189Z] ✅ TEST 1 PASSED: Correctly retrieved 'mpesa' from SystemSettings.
+[2026-08-13T07:57:39.190Z] 
+--- TEST 2: PayHero Gateway Switching ---
+[2026-08-13T07:57:39.202Z] Active Gateway retrieved: 'payhero'
+[2026-08-13T07:57:39.203Z] ✅ TEST 2 PASSED: Correctly retrieved 'payhero' after admin toggle.
+[2026-08-13T07:57:39.205Z] 
+--- TEST 3: PayHero STK Push Initiation ---
+[2026-08-13T07:57:39.716Z] PayHero STK Response: {"success":true,"provider":"payhero","CheckoutRequestID":"PH_CO_Mock_e447b63a7a7a7513","reference":"monthly_subscription_6a7d78f3b80d0c7c084cce83_1786607859208","ResponseCode":"0","CustomerMessage":"Success (Sandbox Mock). PayHero STK Push accepted"}
+[2026-08-13T07:57:39.717Z] ✅ TEST 3 PASSED: PayHero STK Push payload created and CheckoutRequestID returned.
+[2026-08-13T07:57:39.718Z] 
+--- TEST 4: Unified Gateway router STK Push dispatch ---
+[2026-08-13T07:57:39.864Z] Unified STK Response: {"success":true,"provider":"payhero","CheckoutRequestID":"PH_CO_Mock_c34237a5469ea1b1","reference":"monthly_subscription_6a7d78f3b80d0c7c084cce83_1786607859722","ResponseCode":"0","CustomerMessage":"Success (Sandbox Mock). PayHero STK Push accepted"}
+[2026-08-13T07:57:39.865Z] ✅ TEST 4 PASSED: Unified router dispatched deposit to PayHero seamlessly.
+[2026-08-13T07:57:39.865Z] 
+--- TEST 5: PayHero Webhook Callback Verification ---
+[2026-08-13T07:57:39.867Z] Callback Verification Result: {"success":true,"provider":"payhero","checkoutRequestID":"PH_CO_MOCK_TEST_123","resultCode":0,"amountPaid":2000,"mpesaReceiptNumber":"PH99988877","phonePaidFrom":"254712345678"}
+[2026-08-13T07:57:39.868Z] ✅ TEST 5 PASSED: PayHero webhook payload parsed and verified successfully.
+[2026-08-13T07:57:39.873Z] 
+Reset active_payment_gateway to 'mpesa'.
+[2026-08-13T07:57:39.874Z] 
+=== PAYHERO & MULTI-GATEWAY TEST SUITE COMPLETED ===

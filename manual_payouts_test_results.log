@@ -1,0 +1,17 @@
+=== MANUAL PAYOUT & REFUND APPROVAL WORKFLOW INTENSE TEST SUITE ===
+
+[2026-08-13T07:43:20.666Z] Connecting to MongoDB database...
+[2026-08-13T07:43:20.717Z] ✅ Connected to MongoDB.
+[2026-08-13T07:43:21.263Z] 
+--- TEST 1: Vendor Withdrawal Request Approval (Manual Dispatch) ---
+[2026-08-13T07:43:25.968Z] Withdrawal Approval Response: {"code":200,"data":{"message":"Withdrawal request approved and on-chain tokens burned. Please proceed to manually send payout.","request":{"_id":"6a7d759961e8f2ccb998537a","user":{"_id":"6a7d759961e8f2ccb998536a","avatar":"","name":"Manual Payout Test User","email":"testpayout_1786607001078@example.com","phone":"","role":"vendor","isApproved":true,"requiresPasswordChange":false,"linkedAccounts":[],"otpCode":null,"otpExpiry":null,"createdAt":"2026-08-13T07:43:21.095Z","updatedAt":"2026-08-13T07:43:21.095Z","__v":0},"amountKES":{"$numberDecimal":"500.00"},"phone":"254718930888","status":"approved","notificationSent":false,"approvedBy":"6a7d759961e8f2ccb998537d","approvedAt":"2026-08-13T07:43:25.961Z","rejectedAt":null,"rejectionReason":"","stellarTxHash":null,"mpesaReceipt":null,"createdAt":"2026-08-13T07:43:21.266Z","updatedAt":"2026-08-13T07:43:25.962Z","__v":0}}}
+[2026-08-13T07:43:25.974Z] ✅ TEST 1 PASSED: Withdrawal request approved without triggering automated B2C call. Pending balance deducted to 0 KES.
+[2026-08-13T07:43:25.975Z] 
+--- TEST 2: Student Subscription Refund Request Approval ---
+[2026-08-13T07:43:26.428Z] Refund Approval Response: {"code":200,"data":{"message":"Refund of KES 1000 approved. Wallet status reset to active.","refundRequest":{"_id":"6a7d759e61e8f2ccb9985397","student":{"_id":"6a7d759d61e8f2ccb998538a","name":"Manual Refund Test Student","email":"teststudent_1786607005976@example.com","phone":""},"amountKES":"1000","status":"approved","source":"subscription_cancellation","fundingType":"self","sponsor":null,"subscription":null,"deliveryIds":["6a7d759e61e8f2ccb9985391","6a7d759e61e8f2ccb9985394"],"approvedBy":"6a7d759e61e8f2ccb9985399","approvedAt":"2026-08-13T07:43:26.417Z","rejectedAt":null,"rejectionReason":"","createdAt":"2026-08-13T07:43:26.081Z","updatedAt":"2026-08-13T07:43:26.417Z","__v":0}}}
+[2026-08-13T07:43:26.441Z] ✅ TEST 2 PASSED: Subscription refund approved successfully. Locked balance returned to available wallet balance and subscription deactivated.
+[2026-08-13T07:43:26.442Z] 
+Cleaning up test documents from database...
+[2026-08-13T07:43:26.458Z] ✅ Cleanup complete.
+[2026-08-13T07:43:26.460Z] 
+=== MANUAL PAYOUT & REFUND APPROVAL TEST SUITE COMPLETED ===

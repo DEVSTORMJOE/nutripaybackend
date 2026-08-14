@@ -58,12 +58,12 @@ const dispatchNotification = async (notification) => {
           }
         }, pushPayload);
       } catch (err) {
-        // If subscription has expired or is invalid (410 Gone / 404 Not Found), delete it from DB
-        if (err.statusCode === 410 || err.statusCode === 404) {
-          console.log(`Deleting expired push subscription: ${sub.subscription.endpoint}`);
+        // If subscription has expired or is invalid (410 Gone / 404 Not Found / 403 Forbidden), delete it from DB
+        if (err.statusCode === 410 || err.statusCode === 404 || err.statusCode === 403) {
+          console.warn(`[WebPush] Removing invalid/expired push subscription (${err.statusCode}): ${sub.subscription.endpoint.substring(0, 45)}...`);
           await PushSubscription.deleteOne({ _id: sub._id });
         } else {
-          console.error(`Error sending push notification:`, err);
+          console.error(`[WebPush] Error sending push notification:`, err.message);
         }
       }
     });

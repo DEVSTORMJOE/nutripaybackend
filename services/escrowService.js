@@ -300,7 +300,7 @@ async function calculateRefund(deliveryIds, studentId, session = null) {
   const studentWallet = session
     ? await Wallet.findOne({ user: studentId }).session(session)
     : await Wallet.findOne({ user: studentId });
-  let currentLocked = studentWallet ? studentWallet.lockedBalanceKES : 0;
+  let currentLocked = studentWallet && studentWallet.lockedBalanceKES ? parseFloat(studentWallet.lockedBalanceKES.toString()) : 0;
   let remainingLocked = currentLocked;
 
   // Cap student portion first
@@ -406,7 +406,7 @@ async function calculateRefund(deliveryIds, studentId, session = null) {
   const updateQuery = Delivery.updateMany({ _id: { $in: deliveryIds } }, { $set: { status: 'cancelled' } });
   await (session ? updateQuery.session(session) : updateQuery);
 
-  return { refundedKES: totalRefundKes, stellarTxHash };
+  return { refundedKES: totalRefundKes, stellarTxHash: refundTxs[0]?.stellarTxHash || null };
 }
 
 /**

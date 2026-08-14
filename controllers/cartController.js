@@ -1,5 +1,6 @@
 const Cart = require("../models/Cart");
 const Wallet = require("../models/Wallet");
+const mongoose = require("mongoose");
 const User = require("../models/User");
 const Transaction = require("../models/Transaction");
 const Delivery = require("../models/Delivery");
@@ -72,37 +73,53 @@ async function checkoutCart(req, res) {
       return res.status(400).json({ message: "Cart is empty" });
     }
 
-    const monthlyTemplate = cart.templates && cart.templates.find(t => t.isMonthlyPlan || t.billingCycle === "monthly");
+    const monthlyTemplate = cart.templates && cart.templates.find(t => t.isMonthlyPlan || t.billingCycle === "monthly" || t.billingCycle === "weekly");
 
     if (monthlyTemplate) {
+      const isWeeklyPlan = monthlyTemplate.billingCycle === "weekly" || monthlyTemplate.durationDays === 7;
+      const durationDays = isWeeklyPlan ? 7 : 28;
+      const billingCycle = isWeeklyPlan ? 'weekly' : 'monthly';
+
+      const SystemSettings = require('../models/SystemSettings');
+      if (isWeeklyPlan) {
+        const weeklyEnabled = await SystemSettings.getSetting('weekly_subscriptions_enabled', true);
+        if (!weeklyEnabled) {
+          return res.status(400).json({ message: "Weekly subscriptions are currently disabled by administration." });
+        }
+      }
+
       // Enforce single active subscription constraint
       const SubscriptionModel = require('../models/Subscription');
       const Student = require('../models/Student');
 
       // Enforce single active subscription constraint atomically to mitigate concurrent checkout races (Double Checkout)
-      const studentProfile = await Student.findOneAndUpdate(
-        { user: userId, subscriptionActive: { $ne: true } },
-        { $set: { subscriptionActive: true } },
-        { new: true }
-      ).populate('deliveryLocation');
-
-      if (!studentProfile) {
-        return res.status(400).json({ message: "You already have an active subscription or a checkout is currently in progress." });
-      }
-
-      // Double-check active subscription in case profile flag was stale but DB has active subscriptions
+      // Double-check active subscription in DB first
       const existingActiveSubscription = await SubscriptionModel.findOne({ student: userId, status: 'active' });
       if (existingActiveSubscription) {
-        studentProfile.subscriptionActive = false;
-        await studentProfile.save();
         return res.status(400).json({ message: "You already have an active subscription. You cannot check out another plan until you opt out of the current one." });
       }
+
+      let studentProfile = await Student.findOne({ user: userId }).populate('deliveryLocation');
+      if (!studentProfile) {
+        return res.status(404).json({ message: "Student profile not found." });
+      }
+
+      studentProfile.subscriptionActive = true;
+      await studentProfile.save();
 
       const subtotalKes = Number(monthlyTemplate.main.price || 0);
       if (subtotalKes <= 0) {
         studentProfile.subscriptionActive = false;
         await studentProfile.save();
         return res.status(400).json({ message: "Subscription plan total cost must be greater than 0" });
+      }
+
+      // Reset any stale leftover locked funds from past un-refunded tests so lockedBalanceKES precisely matches the new subscription
+      const Wallet = require('../models/Wallet');
+      const studentWallet = await Wallet.findOne({ user: userId });
+      if (studentWallet) {
+        studentWallet.lockedBalanceKES = mongoose.Types.Decimal128.fromString("0.00");
+        await studentWallet.save();
       }
 
       // 1. Lock subscription funds using the Escrow Service (Stellar token locking is mirrored inside)
@@ -136,8 +153,8 @@ async function checkoutCart(req, res) {
         startDate.setHours(6, 0, 0, 0);
       }
 
-      // endDate is 28 days from startDate (inclusive, 27 full days added)
-      const endDate = new Date(startDate.getTime() + 27 * 24 * 60 * 60 * 1000);
+      // endDate is durationDays from startDate (inclusive, durationDays-1 full days added)
+      const endDate = new Date(startDate.getTime() + (durationDays - 1) * 24 * 60 * 60 * 1000);
 
       const subscription = await Subscription.create({
         student: userId,
@@ -145,17 +162,19 @@ async function checkoutCart(req, res) {
         status: 'active',
         startDate: startDate,
         endDate: endDate,
-        totalPaidKES: subtotalKes
+        totalPaidKES: subtotalKes,
+        billingCycle: billingCycle,
+        durationDays: durationDays
       });
 
-      // Clear out overlapping or future subscription deliveries to overwrite cancelled/old ones
+      // Clear out old unfulfilled or overlapping subscription deliveries for this student to prevent stale test data leaks
       await Delivery.deleteMany({
         student: userId,
         isCustom: { $ne: true },
-        scheduledDate: { $gte: startDate }
+        status: { $in: ['pending', 'assigned'] }
       });
 
-      // 3. Schedule the monthly deliveries based on WeeklyPlan or customSchedule
+      // 3. Schedule the deliveries based on WeeklyPlan or customSchedule
       const Meal = require('../models/Meal');
       const approvedMeals = await Meal.find({ approvalStatus: 'approved' }).lean();
       if (approvedMeals.length === 0) {
@@ -182,7 +201,7 @@ async function checkoutCart(req, res) {
         const customSchedule = monthlyTemplate.customSchedule;
         const uniqueMealIds = new Set();
 
-        for (let dayOffset = 0; dayOffset < 28; dayOffset++) {
+        for (let dayOffset = 0; dayOffset < durationDays; dayOffset++) {
           const dayConfig = Array.isArray(customSchedule) ? customSchedule[dayOffset] : customSchedule[String(dayOffset)] || customSchedule[dayOffset];
           if (dayConfig) {
             if (dayConfig.breakfast) uniqueMealIds.add(dayConfig.breakfast.toString());
@@ -197,7 +216,7 @@ async function checkoutCart(req, res) {
           mealMap[m._id.toString()] = m;
         }
 
-        for (let dayOffset = 0; dayOffset < 28; dayOffset++) {
+        for (let dayOffset = 0; dayOffset < durationDays; dayOffset++) {
           const scheduledDate = new Date(startDate.getTime() + dayOffset * 24 * 60 * 60 * 1000);
           const dayConfig = Array.isArray(customSchedule) ? customSchedule[dayOffset] : customSchedule[String(dayOffset)] || customSchedule[dayOffset];
 
@@ -216,6 +235,7 @@ async function checkoutCart(req, res) {
 
             deliveriesToInsert.push({
               student: userId,
+              subscription: subscription._id,
               vendor: matchedMeal.vendor || defaultVendor,
               items: [{ name: matchedMeal.name, quantity: 1 }],
               status: 'pending',
@@ -235,11 +255,11 @@ async function checkoutCart(req, res) {
           .populate('supper')
           .lean();
 
-        for (let dayOffset = 0; dayOffset < 28; dayOffset++) {
+        for (let dayOffset = 0; dayOffset < durationDays; dayOffset++) {
           const scheduledDate = new Date(startDate.getTime() + dayOffset * 24 * 60 * 60 * 1000);
           const weekdays = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
           const dayName = weekdays[scheduledDate.getDay()];
-          const week = Math.floor(dayOffset / 7) + 1;
+          const week = isWeeklyPlan ? 1 : Math.floor(dayOffset / 7) + 1;
 
           const matchedPlan = plans.find(p => p.week === week && p.day === dayName);
 
@@ -262,6 +282,7 @@ async function checkoutCart(req, res) {
 
             deliveriesToInsert.push({
               student: userId,
+              subscription: subscription._id,
               vendor: matchedMeal.vendor || defaultVendor,
               items: items,
               status: 'pending',
@@ -586,13 +607,19 @@ async function addSponsorCheckout(req, res) {
     const deliveryLocationId = studentProfile?.deliveryLocation?._id || null;
     const hostelResidence = studentProfile?.deliveryLocation?.hostelResidence || 'Campus';
 
-    const monthlyTemplate = cart.templates && cart.templates.find(t => t.isMonthlyPlan || t.billingCycle === "monthly");
+    const monthlyTemplate = cart.templates && cart.templates.find(t => t.isMonthlyPlan || t.billingCycle === "monthly" || t.billingCycle === "weekly");
     
-    // Determine planId, startDate, and endDate
+    // Determine planId, startDate, endDate, and durationDays
     let planId = 'essential';
     let startDate = new Date();
+    let isWeeklyPlan = false;
+    let durationDays = 28;
+
     if (monthlyTemplate) {
+      isWeeklyPlan = monthlyTemplate.billingCycle === "weekly" || monthlyTemplate.durationDays === 7;
+      durationDays = isWeeklyPlan ? 7 : 28;
       planId = monthlyTemplate.planId || 'essential';
+
       if (monthlyTemplate.startDate) {
         const parts = String(monthlyTemplate.startDate).split("-");
         if (parts.length === 3) {
@@ -609,7 +636,7 @@ async function addSponsorCheckout(req, res) {
         startDate.setHours(6, 0, 0, 0);
       }
     }
-    const endDate = monthlyTemplate ? new Date(startDate.getTime() + 27 * 24 * 60 * 60 * 1000) : null;
+    const endDate = monthlyTemplate ? new Date(startDate.getTime() + (durationDays - 1) * 24 * 60 * 60 * 1000) : null;
 
     if (monthlyTemplate) {
       const approvedMeals = await Meal.find({ approvalStatus: 'approved' }).lean();
@@ -633,7 +660,7 @@ async function addSponsorCheckout(req, res) {
         const customSchedule = monthlyTemplate.customSchedule;
         const uniqueMealIds = new Set();
 
-        for (let dayOffset = 0; dayOffset < 28; dayOffset++) {
+        for (let dayOffset = 0; dayOffset < durationDays; dayOffset++) {
           const dayConfig = Array.isArray(customSchedule) ? customSchedule[dayOffset] : customSchedule[String(dayOffset)] || customSchedule[dayOffset];
           if (dayConfig) {
             if (dayConfig.breakfast) uniqueMealIds.add(dayConfig.breakfast.toString());
@@ -648,7 +675,7 @@ async function addSponsorCheckout(req, res) {
           mealMap[m._id.toString()] = m;
         }
 
-        for (let dayOffset = 0; dayOffset < 28; dayOffset++) {
+        for (let dayOffset = 0; dayOffset < durationDays; dayOffset++) {
           const scheduledDate = new Date(startDate.getTime() + dayOffset * 24 * 60 * 60 * 1000);
           const dayConfig = Array.isArray(customSchedule) ? customSchedule[dayOffset] : customSchedule[String(dayOffset)] || customSchedule[dayOffset];
 
@@ -687,11 +714,11 @@ async function addSponsorCheckout(req, res) {
           .populate('supper')
           .lean();
 
-        for (let dayOffset = 0; dayOffset < 28; dayOffset++) {
+        for (let dayOffset = 0; dayOffset < durationDays; dayOffset++) {
           const scheduledDate = new Date(startDate.getTime() + dayOffset * 24 * 60 * 60 * 1000);
           const weekdays = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
           const dayName = weekdays[scheduledDate.getDay()];
-          const week = Math.floor(dayOffset / 7) + 1;
+          const week = isWeeklyPlan ? 1 : Math.floor(dayOffset / 7) + 1;
 
           const matchedPlan = plans.find(p => p.week === week && p.day === dayName);
 

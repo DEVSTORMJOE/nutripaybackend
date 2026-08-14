@@ -1,4 +1,5 @@
 const mpesaService = require('./mpesaService');
+const paymentGatewayService = require('./paymentGatewayService');
 const NDashOrder = require('../models/NDashOrder');
 const NDashAuditLog = require('../models/NDashAuditLog');
 const Transaction = require('../models/Transaction');
@@ -7,8 +8,8 @@ const User = require('../models/User');
 
 async function initiateSTKPush(userId, phone, grandTotal) {
   try {
-    // Initiate STK push through the existing mpesaService
-    const data = await mpesaService.initiateDeposit(userId, phone, grandTotal, 'quick_order');
+    // Initiate STK push through the unified payment gateway router
+    const data = await paymentGatewayService.initiateDeposit(userId, phone, grandTotal, 'quick_order');
     return data;
   } catch (err) {
     console.error('[ndashPaymentService] initiateSTKPush error:', err.message);

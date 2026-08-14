@@ -909,53 +909,49 @@ const handleWithdrawalRequest = async (req, res) => {
     fs.appendFileSync(logFilePath, JSON.stringify(auditRecord) + "\n");
 
     if (status === 'approved') {
-      // 1. Dispatch B2C payout to user's phone via Safaricom Daraja API
-      let payoutResult;
+      const mongoose = require('mongoose');
+      const amount = parseFloat(request.amountKES.toString());
+      const currentPending = parseFloat(wallet.pendingWithdrawalKES ? wallet.pendingWithdrawalKES.toString() : '0');
+
+      // Deduct from pendingWithdrawalKES
+      wallet.pendingWithdrawalKES = mongoose.Types.Decimal128.fromString(Math.max(0, currentPending - amount).toFixed(2));
+      await wallet.save();
+
+      // Trigger Stellar on-chain NT token burn for withdrawal
+      let settlementStatus = 'synced';
+      let stellarTxHash = null;
       try {
-        payoutResult = await mpesaService.withdrawToMpesa(request.phone, parseFloat(request.amountKES.toString()));
-      } catch (payoutErr) {
-        // Revert locking status if payout fails so admin can retry
-        request.status = 'requested';
-        await request.save();
-        return res.status(500).json({ message: "Safaricom B2C payout initiation failed: " + payoutErr.message });
+        const stellarTreasuryService = require('../services/stellarTreasuryService');
+        stellarTxHash = await stellarTreasuryService.moveVendorToTreasury(amount);
+        console.log(`[Manual Payout] Stellar token burn/redemption successful for withdrawal of KES ${amount}. Tx: ${stellarTxHash}`);
+      } catch (stellarErr) {
+        console.error("[Manual Payout] Stellar token burn failed:", stellarErr.message);
+        settlementStatus = 'failed';
       }
 
-      // 2. Set status to b2c_pending and track conversation IDs
-      const crypto = require('crypto');
-      request.status = 'b2c_pending';
-      request.conversationId = payoutResult.conversationId || `B2C_Conv_${crypto.randomUUID()}`;
-      request.originatorConversationId = payoutResult.originatorConversationId || `B2C_Orig_${crypto.randomUUID()}`;
+      // Finalize withdrawal request status as approved for manual cash dispatch
+      request.status = 'approved';
       request.approvedBy = req.user.id;
       request.approvedAt = new Date();
+      request.transactionHash = stellarTxHash || null;
       await request.save();
 
-      // Sandbox environment: auto-simulate B2C callback completion
-      if (payoutResult.success || payoutResult.conversationId) {
-        setTimeout(async () => {
-          try {
-            const mpesaController = require('./mpesaController');
-            const mockBody = {
-              Result: {
-                ResultCode: 0,
-                ConversationID: request.conversationId,
-                OriginatorConversationID: request.originatorConversationId,
-                ResultDesc: "Accept the service request successfully."
-              }
-            };
-            const mockReq = { body: mockBody };
-            const mockRes = {
-              status: () => ({ json: () => {} }),
-              json: () => {}
-            };
-            await mpesaController.mpesaB2CCallback(mockReq, mockRes);
-            console.log(`[Sandbox Mock B2C Callback] Auto-triggered B2C payout callback simulation for request ID: ${request._id}`);
-          } catch (mockErr) {
-            console.error("Mock B2C Callback simulation failed:", mockErr.message);
-          }
-        }, 1500);
-      }
+      // Create transaction log for withdrawal completion
+      await Transaction.create({
+        transactionId: crypto.randomUUID(),
+        fromUser: request.user,
+        amountKES: amount,
+        transactionCategory: 'withdrawal',
+        paymentMethod: 'mpesa',
+        status: 'completed',
+        settlementStatus: settlementStatus,
+        stellarTxHash: stellarTxHash || null,
+        description: `Manual payout approved for ${request.phone}. Amount: KES ${amount}.`
+      });
 
-      return res.json({ message: "Withdrawal request approved and payout B2C pending.", request });
+      console.log(`[AUDIT LOG - MANUAL PAYOUT] Withdrawal ID: ${request._id} approved by admin ${req.user.id}. KES ${amount} to ${request.phone}. Manual dispatch required.`);
+
+      return res.json({ message: "Withdrawal request approved and on-chain tokens burned. Please proceed to manually send payout.", request });
     } else if (status === 'rejected') {
       // Reject request: release funds from pendingWithdrawalKES back to availableBalanceKES
       const currentAvail = parseFloat(wallet.availableBalanceKES ? wallet.availableBalanceKES.toString() : '0');
@@ -1034,11 +1030,16 @@ const getSettings = async (req, res) => {
       essential_price: await getSettingVal('essential_price', 3500),
       elite_price: await getSettingVal('elite_price', 4500),
       ultimate_price: await getSettingVal('ultimate_price', 6000),
+      weekly_subscriptions_enabled: await getSettingVal('weekly_subscriptions_enabled', true),
+      weekly_essential_price: await getSettingVal('weekly_essential_price', 900),
+      weekly_elite_price: await getSettingVal('weekly_elite_price', 1200),
+      weekly_ultimate_price: await getSettingVal('weekly_ultimate_price', 1550),
       banner_small_url: await getSettingVal('banner_small_url', ''),
       banner_large_url: await getSettingVal('banner_large_url', ''),
       banner_timer: await getSettingVal('banner_timer', 5),
       banner_visible: await getSettingVal('banner_visible', false),
-      banner_content: await getSettingVal('banner_content', '<h1>Welcome to NutriPay!</h1><p>Special banner description here.</p>')
+      banner_content: await getSettingVal('banner_content', '<h1>Welcome to NutriPay!</h1><p>Special banner description here.</p>'),
+      active_payment_gateway: await getSettingVal('active_payment_gateway', 'mpesa')
     });
   } catch (e) {
     console.error(e);
@@ -1051,11 +1052,16 @@ const updateSettings = async (req, res) => {
     essential_price,
     elite_price,
     ultimate_price,
+    weekly_subscriptions_enabled,
+    weekly_essential_price,
+    weekly_elite_price,
+    weekly_ultimate_price,
     banner_small_url,
     banner_large_url,
     banner_timer,
     banner_visible,
-    banner_content
+    banner_content,
+    active_payment_gateway
   } = req.body;
   try {
     const SystemSettings = require('../models/SystemSettings');
@@ -1068,9 +1074,16 @@ const updateSettings = async (req, res) => {
     await updateKey('essential_price', essential_price !== undefined ? Number(essential_price) : undefined);
     await updateKey('elite_price', elite_price !== undefined ? Number(elite_price) : undefined);
     await updateKey('ultimate_price', ultimate_price !== undefined ? Number(ultimate_price) : undefined);
+    await updateKey('weekly_subscriptions_enabled', weekly_subscriptions_enabled !== undefined ? Boolean(weekly_subscriptions_enabled) : undefined);
+    await updateKey('weekly_essential_price', weekly_essential_price !== undefined ? Number(weekly_essential_price) : undefined);
+    await updateKey('weekly_elite_price', weekly_elite_price !== undefined ? Number(weekly_elite_price) : undefined);
+    await updateKey('weekly_ultimate_price', weekly_ultimate_price !== undefined ? Number(weekly_ultimate_price) : undefined);
     await updateKey('banner_small_url', banner_small_url);
     await updateKey('banner_large_url', banner_large_url);
     await updateKey('banner_timer', banner_timer !== undefined ? Number(banner_timer) : undefined);
+    await updateKey('banner_visible', banner_visible !== undefined ? Boolean(banner_visible) : undefined);
+    await updateKey('banner_content', banner_content);
+    await updateKey('active_payment_gateway', active_payment_gateway ? String(active_payment_gateway).toLowerCase() : undefined);
     await updateKey('banner_visible', banner_visible);
     await updateKey('banner_content', banner_content);
 
@@ -1246,16 +1259,8 @@ const handleRefundApproval = async (req, res) => {
           }, 'error');
         }
 
-        // Trigger M-Pesa B2C payout with actual capped amount
-        if (studentPhone && actualRefundKES > 0) {
-          try {
-            const mpesaService = require('../services/mpesaService');
-            payoutResult = await mpesaService.withdrawToMpesa(studentPhone, actualRefundKES);
-            console.log('[Refund B2C] M-Pesa payout initiated:', payoutResult);
-          } catch (payoutErr) {
-            console.error('[Refund B2C] M-Pesa B2C payout initiation failed:', payoutErr.message);
-          }
-        }
+        // Manual dispatch required for available balance refund
+        console.log(`[AUDIT LOG - MANUAL PAYOUT] Available balance refund approved for ${studentPhone}. Amount: KES ${actualRefundKES}. Manual dispatch required.`);
 
         // Create withdrawal transaction log
         await Transaction.create({
@@ -1320,6 +1325,16 @@ const handleRefundApproval = async (req, res) => {
       refundRequest.approvedBy = req.user.id;
       refundRequest.approvedAt = new Date();
       await refundRequest.save();
+
+      // Clean up any remaining stale/duplicate pending refund requests for this student so they don't linger in Admin 'Pending' view
+      await RefundRequest.updateMany(
+        { student: refundRequest.student._id, _id: { $ne: id }, status: 'pending_admin_approval' },
+        { $set: { status: 'rejected', rejectionReason: 'Superseded by approved refund request' } }
+      );
+
+      // Reset student profile subscriptionActive flag so student can subscribe to new plans cleanly
+      const Student = require('../models/Student');
+      await Student.findOneAndUpdate({ user: refundRequest.student._id }, { subscriptionActive: false });
 
       return res.json({
         message: `Refund of KES ${actualRefundKES} approved. Wallet status reset to active.`,

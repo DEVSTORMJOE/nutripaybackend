@@ -82,6 +82,7 @@ const authLimiter = rateLimit({
   },
   standardHeaders: true,
   legacyHeaders: false,
+  validate: { trustProxy: false },
   store: new DynamicRateLimitStore("auth")
 });
 
@@ -94,6 +95,7 @@ const transactionLimiter = rateLimit({
   },
   standardHeaders: true,
   legacyHeaders: false,
+  validate: { trustProxy: false },
   store: new DynamicRateLimitStore("transaction")
 });
 
@@ -106,6 +108,7 @@ const aiLimiter = rateLimit({
   },
   standardHeaders: true,
   legacyHeaders: false,
+  validate: { trustProxy: false },
   store: new DynamicRateLimitStore("ai")
 });
 
@@ -118,6 +121,7 @@ const generalLimiter = rateLimit({
   },
   standardHeaders: true,
   legacyHeaders: false,
+  validate: { trustProxy: false },
   store: new DynamicRateLimitStore("general")
 });
 

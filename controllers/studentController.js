@@ -118,15 +118,20 @@ const optOut = async (req, res) => {
     // Find active subscription
     const subscription = await Subscription.findOne({ student: studentId, status: 'active' });
     
-    // Find unfulfilled deliveries before the preparation stage (only pending and assigned)
-    // Meals already preparing, ready, or picked up cannot be cancelled or refunded on opt-out.
-    // Donated meals cannot be cancelled by the donator so they are excluded.
-    const pendingDeliveries = await Delivery.find({
+    // Find unfulfilled deliveries belonging to the active subscription before the preparation stage
+    const deliveryQuery = {
       student: studentId,
       status: { $in: ['pending', 'assigned'] },
       isCustom: { $ne: true },
       isDonated: { $ne: true }
-    });
+    };
+    if (subscription) {
+      deliveryQuery.$or = [
+        { subscription: subscription._id },
+        { subscription: { $exists: false }, createdAt: { $gte: subscription.createdAt || subscription.startDate } }
+      ];
+    }
+    const pendingDeliveries = await Delivery.find(deliveryQuery);
 
     if (!subscription && pendingDeliveries.length === 0) {
       return res.status(400).json({ message: 'No active subscription or unfulfilled deliveries to opt out from.' });
@@ -218,7 +223,15 @@ const optOut = async (req, res) => {
 // @access  Private (Student)
 const getDeliverySchedule = async (req, res) => {
   try {
-    const deliveries = await Delivery.find({ student: req.user.id, isCustom: { $ne: true } })
+    const activeSub = await Subscription.findOne({ student: req.user.id, status: 'active' });
+    const query = { student: req.user.id, isCustom: { $ne: true } };
+    if (activeSub) {
+      query.$or = [
+        { subscription: activeSub._id },
+        { subscription: { $exists: false }, createdAt: { $gte: activeSub.createdAt || activeSub.startDate } }
+      ];
+    }
+    const deliveries = await Delivery.find(query)
       .populate('deliveryAgent', 'name email')
       .sort({ scheduledDate: 1 });
     res.json(deliveries);
@@ -257,6 +270,17 @@ const cancelDeliveries = async (req, res) => {
     const deliveries = await Delivery.find({ _id: { $in: deliveryIds }, student: studentId, status: 'pending', isDonated: { $ne: true } });
     if (deliveries.length === 0) {
       return res.status(404).json({ message: "No pending scheduled non-donated meals found for these IDs." });
+    }
+
+    const Subscription = require('../models/Subscription');
+    const activeSub = await Subscription.findOne({ student: studentId, status: 'active' });
+    const isWeekly = activeSub && activeSub.billingCycle === 'weekly';
+
+    if (isWeekly) {
+      const currentCancelledTotal = (studentProfile.cancelledBreakfastCount || 0) + (studentProfile.cancelledLunchCount || 0) + (studentProfile.cancelledSupperCount || 0);
+      if (currentCancelledTotal + deliveries.length > 1) {
+        return res.status(400).json({ message: "Weekly subscriptions allow a maximum of 1 meal cancellation per week." });
+      }
     }
 
     for (let d of deliveries) {
@@ -395,15 +419,20 @@ const shuffleMeal = async (req, res) => {
     const studentProfile = await Student.findOne({ user: studentId });
     if (!studentProfile) return res.status(404).json({ message: 'Student profile not found.' });
 
-    // 1. Enforce monthly limit of 3 shuffles
+    // 1. Enforce limit of 3 shuffles for monthly plans or 2 shuffles for weekly plans
     const currentMonth = new Date().getMonth();
     if (studentProfile.cancellationResetMonth !== currentMonth) {
       studentProfile.shufflesCount = 0;
       studentProfile.cancellationResetMonth = currentMonth;
     }
 
-    if (studentProfile.shufflesCount >= 3) {
-      return res.status(400).json({ message: "You have reached the maximum limit of 3 shuffles per month." });
+    const Subscription = require('../models/Subscription');
+    const activeSub = await Subscription.findOne({ student: studentId, status: 'active' });
+    const isWeekly = activeSub && activeSub.billingCycle === 'weekly';
+    const maxShuffles = isWeekly ? 2 : 3;
+
+    if (studentProfile.shufflesCount >= maxShuffles) {
+      return res.status(400).json({ message: `You have reached the maximum limit of ${maxShuffles} shuffles for your ${isWeekly ? 'weekly' : 'monthly'} subscription.` });
     }
 
     // 2. Query delivery and verify
