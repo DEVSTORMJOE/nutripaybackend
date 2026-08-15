@@ -825,10 +825,47 @@ const getWeeklyPlans = async (req, res) => {
       .populate('breakfast')
       .populate('lunch')
       .populate('supper');
+
+    // Auto-mirroring for Week 3 (from Week 1) & Week 4 (from Week 2)
+    const targetWeek = Number(req.query.week || 0);
+    if ((targetWeek === 3 || targetWeek === 4) && req.query.planId) {
+      if (!plans || plans.length === 0) {
+        const fallbackWeek = targetWeek === 3 ? 1 : 2;
+        const fallbackPlans = await WeeklyPlan.find({ planId: req.query.planId, week: fallbackWeek })
+          .populate('breakfast')
+          .populate('lunch')
+          .populate('supper')
+          .lean();
+
+        const mirroredPlans = fallbackPlans.map(p => ({
+          ...p,
+          _originalWeek: fallbackWeek,
+          week: targetWeek,
+          isMirrored: true
+        }));
+
+        return res.json(mirroredPlans);
+      }
+    }
+
     res.json(plans);
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: 'Server Error' });
+  }
+};
+
+const resetWeeklyPlan = async (req, res) => {
+  const { planId, week } = req.body;
+  if (!planId || !week) {
+    return res.status(400).json({ message: "planId and week are required." });
+  }
+  try {
+    await WeeklyPlan.deleteMany({ planId, week: Number(week) });
+    res.json({ message: `Successfully reset Week ${week} to default mirrored schedule.` });
+  } catch (error) {
+    console.error("Reset Weekly Plan Error:", error);
+    res.status(500).json({ message: 'Failed to reset weekly plan: ' + error.message });
   }
 };
 
@@ -1480,6 +1517,7 @@ module.exports = {
   approveDelivery,
   getWeeklyPlans,
   updateWeeklyPlan,
+  resetWeeklyPlan,
   getWithdrawalRequests,
   handleWithdrawalRequest,
   assignLocationsToDriver,

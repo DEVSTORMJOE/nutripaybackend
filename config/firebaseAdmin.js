@@ -20,8 +20,16 @@ function loadServiceAccount() {
     : path.resolve(process.cwd(), serviceAccountPath);
 
   if (!fs.existsSync(absolutePath)) {
+    // Check if environment variables are provided instead
+    if (process.env.FIREBASE_PROJECT_ID && process.env.FIREBASE_CLIENT_EMAIL && process.env.FIREBASE_PRIVATE_KEY) {
+      return {
+        project_id: process.env.FIREBASE_PROJECT_ID,
+        client_email: process.env.FIREBASE_CLIENT_EMAIL,
+        private_key: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n'),
+      };
+    }
     console.warn(`Firebase service account file not found at: ${absolutePath}`);
-    console.warn("Firebase Auth will not work until this file is provided.");
+    console.warn("Firebase Auth will not work until this file is provided or env variables (FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL, FIREBASE_PRIVATE_KEY) are set.");
     return null;
   }
 

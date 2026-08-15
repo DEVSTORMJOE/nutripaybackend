@@ -58,43 +58,31 @@ async function processPaymentSuccess(checkoutRequestID, receipt, amount, phone) 
     description: `N-Dash Payment for Order #${order.orderId}`
   });
   
-  // 5. Payout driver shopping cost via M-Pesa B2C
+  // 5. Driver Notification & Manual Payout Tracking
   if (order.deliveryAgent) {
     const driver = await User.findById(order.deliveryAgent);
     if (driver && driver.phone) {
       try {
-        console.log(`[ndashPaymentService] Initiating B2C payout of KES ${order.shoppingCost} to driver ${driver.phone}`);
+        console.log(`[ndashPaymentService] Order #${order.orderId} paid. Manual driver shopping payout required for KES ${order.shoppingCost} to driver ${driver.phone}`);
         
-        // Dispatch B2C payout
-        const b2cRes = await mpesaService.withdrawToMpesa(driver.phone, order.shoppingCost);
+        // Automated B2C payout paused (requires live B2C production credentials)
+        // const b2cRes = await mpesaService.withdrawToMpesa(driver.phone, order.shoppingCost);
         
-        // Log transactional audit for driver payout
-        await Transaction.create({
-          transactionId: b2cRes.conversationId || `B2C-${order.orderId}`,
-          fromUser: null, // from system
-          toUser: driver._id,
-          amountKES: order.shoppingCost,
-          transactionCategory: 'ndash_payout',
-          paymentMethod: 'mpesa',
-          status: 'completed',
-          description: `N-Dash Driver Shopping Payout (Order #${order.orderId})`
-        });
-        
-        // Audit log payout
+        // Audit log manual payout pending state for driver
         await NDashAuditLog.create({
-          action: 'driver_payout_success',
+          action: 'driver_payout_manual_pending',
           user: driver._id,
           ndashOrder: order._id,
-          details: { amount: order.shoppingCost, phone: driver.phone, response: b2cRes }
+          details: { amount: order.shoppingCost, phone: driver.phone, note: "Automated B2C payout paused. Manual disbursement required." }
         });
         
-        // 6. Send SMS to driver
+        // 6. Send SMS to driver with order details
         await ndashSmsService.sendOrderNotification(order, driver);
         
       } catch (payoutErr) {
-        console.error(`[ndashPaymentService] Driver B2C payout failed for Order #${order.orderId}:`, payoutErr.message);
+        console.error(`[ndashPaymentService] Driver notification/audit failed for Order #${order.orderId}:`, payoutErr.message);
         
-        // Audit log failed payout
+        // Audit log failed payout/notification
         await NDashAuditLog.create({
           action: 'driver_payout_failed',
           user: driver._id,
