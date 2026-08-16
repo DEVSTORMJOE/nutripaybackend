@@ -6,9 +6,9 @@ async function sendOrderNotification(order, driverUser) {
     return;
   }
   
-  const frontendUrl = process.env.CORS_ORIGIN 
-    ? process.env.CORS_ORIGIN.split(',')[0] 
-    : 'http://localhost:3000';
+  const frontendUrl = process.env.FRONTEND_URL 
+    || (process.env.CORS_ORIGIN ? process.env.CORS_ORIGIN.split(',').find(u => u.includes('nutripay.co.ke')) : null) 
+    || 'https://nutripay.co.ke';
   const processingLink = `${frontendUrl}/delivery/ndash-process/${order._id}`;
   
   const Student = require('../models/Student');

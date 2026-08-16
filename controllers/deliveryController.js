@@ -376,11 +376,8 @@ const markDelivered = async (req, res) => {
 
       // Student SMS
       if (studentPhone) {
-        const msgStudent =
-          `NutriPay: Delivered ✅\n` +
-          `Meal: ${dateLabel}${timeSlot ? " • " + timeSlot : ""}\n` +
-          `Amount: ${amount}\n` +
-          `Delivered by: ${driverName}`;
+        const orderIdStr = delivery?.orderId || (delivery?._id ? delivery._id.toString().slice(-8).toUpperCase() : '');
+        const msgStudent = `NutriPay: Your order ${orderIdStr ? '#' + orderIdStr + ' ' : ''}is delivered.`;
 
         try {
           await sendText(studentPhone, msgStudent);
