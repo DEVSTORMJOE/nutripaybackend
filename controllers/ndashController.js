@@ -125,7 +125,13 @@ const placeOrder = async (req, res) => {
 const checkPaymentStatus = async (req, res) => {
   try {
     const { checkoutRequestID } = req.params;
-    const order = await NDashOrder.findOne({ checkoutRequestID, student: req.user.id });
+    const order = await NDashOrder.findOne({
+      student: req.user.id,
+      $or: [
+        { checkoutRequestID },
+        { orderId: checkoutRequestID }
+      ]
+    });
 
     if (!order) {
       return res.status(404).json({ message: 'N-Dash order payment details not found' });

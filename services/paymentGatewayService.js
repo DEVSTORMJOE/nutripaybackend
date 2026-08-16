@@ -47,11 +47,16 @@ function verifyCallback(body, provider = null) {
   const isPayHero =
     provider === 'payhero' ||
     body?.payhero ||
+    payload?.ChannelID ||
+    payload?.channel_id ||
+    payload?.ExternalReference ||
     payload?.external_reference ||
+    payload?.CheckoutRequestID ||
     payload?.checkout_id ||
-    payload?.status === 'SUCCESS' ||
-    payload?.status === 'FAILED' ||
-    payload?.status === 'QUEUED';
+    payload?.MerchantRequestID ||
+    payload?.Status ||
+    (typeof payload?.status === 'string' && payload?.status.toUpperCase() === 'SUCCESS') ||
+    payload?.ResultCode !== undefined;
 
   if (isPayHero) {
     return payheroService.verifyCallback(body);

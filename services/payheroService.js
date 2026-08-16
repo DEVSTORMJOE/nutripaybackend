@@ -98,26 +98,58 @@ function verifyCallback(body) {
     throw new Error("Invalid PayHero callback body");
   }
 
-  // PayHero callback payload can arrive directly or inside response wrapper
+  // PayHero callback payload can arrive directly or inside response/response_data wrapper
   const payload = body.response || body.response_data || body;
 
-  const status = (payload.status || payload.Status || '').toUpperCase();
-  const isSuccess = status === 'SUCCESS' || status === 'COMPLETED' || payload.success === true || payload.result_code === 0;
+  const rawStatus = String(payload.Status || payload.status || payload.ResultDesc || '').toUpperCase();
+  const resultCode = payload.ResultCode !== undefined ? payload.ResultCode : (payload.result_code !== undefined ? payload.result_code : (payload.code !== undefined ? payload.code : null));
+  
+  const isSuccess =
+    rawStatus.includes('SUCCESS') ||
+    rawStatus.includes('COMPLETED') ||
+    payload.success === true ||
+    resultCode === 0 ||
+    resultCode === '0';
 
-  const checkoutRequestID = payload.CheckoutRequestID || payload.checkout_id || payload.reference || `PH_CB_${crypto.randomBytes(4).toString('hex')}`;
-  const externalReference = payload.external_reference || payload.externalReference || payload.merchant_reference || '';
-  const amountPaid = Number(payload.amount || payload.Amount || 0);
-  const mpesaReceiptNumber = payload.MpesaReceiptNumber || payload.mpesa_code || payload.receipt || `PH${crypto.randomBytes(4).toString('hex').toUpperCase()}`;
-  const phonePaidFrom = payload.phone_number || payload.PhoneNumber || payload.phone || '';
+  const checkoutRequestID =
+    payload.CheckoutRequestID ||
+    payload.checkout_id ||
+    payload.reference ||
+    `PH_CB_${crypto.randomBytes(4).toString('hex')}`;
+
+  const merchantRequestID = payload.MerchantRequestID || payload.merchant_reference || '';
+
+  const externalReference =
+    payload.ExternalReference ||
+    payload.external_reference ||
+    payload.externalReference ||
+    payload.merchant_reference ||
+    '';
+
+  const amountPaid = Number(payload.Amount || payload.amount || 0);
+
+  const mpesaReceiptNumber =
+    payload.MpesaReceiptNumber ||
+    payload.mpesa_code ||
+    payload.receipt ||
+    `PH${crypto.randomBytes(4).toString('hex').toUpperCase()}`;
+
+  const phonePaidFrom =
+    payload.Phone ||
+    payload.phone_number ||
+    payload.PhoneNumber ||
+    payload.phone ||
+    '';
 
   if (!isSuccess) {
     return {
       success: false,
       provider: "payhero",
       checkoutRequestID,
+      merchantRequestID,
       externalReference,
-      resultCode: 1,
-      message: payload.message || payload.ResultDesc || "PayHero transaction failed or cancelled"
+      resultCode: resultCode !== null ? resultCode : 1,
+      message: payload.ResultDesc || payload.message || "PayHero transaction failed or cancelled"
     };
   }
 
@@ -125,6 +157,7 @@ function verifyCallback(body) {
     success: true,
     provider: "payhero",
     checkoutRequestID,
+    merchantRequestID,
     externalReference,
     resultCode: 0,
     amountPaid,

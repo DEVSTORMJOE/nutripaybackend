@@ -97,6 +97,7 @@ const mpesaCallback = async (req, res) => {
             // Check if this callback corresponds to a SponsorRequest
             const SponsorRequest = require('../models/SponsorRequest');
             const sponsorQuery = [{ checkoutRequestID }];
+            if (merchantRequestID) sponsorQuery.push({ checkoutRequestID: merchantRequestID });
             if (externalReference) sponsorQuery.push({ checkoutRequestID: externalReference });
             const sponsorRequest = session
                 ? await SponsorRequest.findOne({ $or: sponsorQuery }).session(session)
@@ -270,6 +271,7 @@ const mpesaCallback = async (req, res) => {
             // Check if this callback corresponds to an instant custom order
             const CustomOrder = require('../models/CustomOrder');
             const customOrderQuery = [{ checkoutRequestID }];
+            if (merchantRequestID) customOrderQuery.push({ checkoutRequestID: merchantRequestID });
             if (externalReference) customOrderQuery.push({ checkoutRequestID: externalReference });
             const customOrder = session
                 ? await CustomOrder.findOne({ $or: customOrderQuery }).session(session)
@@ -307,6 +309,7 @@ const mpesaCallback = async (req, res) => {
             // Check if this callback corresponds to an N-Dash errand order
             const NDashOrder = require('../models/NDashOrder');
             const ndashQuery = [{ checkoutRequestID }];
+            if (merchantRequestID) ndashQuery.push({ checkoutRequestID: merchantRequestID });
             if (externalReference) ndashQuery.push({ checkoutRequestID: externalReference });
             const nDashOrder = session
                 ? await NDashOrder.findOne({ $or: ndashQuery }).session(session)
@@ -331,6 +334,7 @@ const mpesaCallback = async (req, res) => {
             }
 
             const depositQuery = [{ checkoutRequestID }];
+            if (merchantRequestID) depositQuery.push({ checkoutRequestID: merchantRequestID });
             if (externalReference) depositQuery.push({ checkoutRequestID: externalReference });
             let depositRecord = session
                 ? await MpesaDeposit.findOne({ $or: depositQuery }).session(session)
