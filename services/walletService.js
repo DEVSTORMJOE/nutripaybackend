@@ -91,7 +91,8 @@ async function creditWallet(
 
   let tx = null;
   if (!skipTxLog) {
-    const txId = extraTxFields.transactionId || crypto.randomUUID();
+    const extraOpts = extraTxFields || {};
+    const txId = extraOpts.transactionId || crypto.randomUUID();
     const txDocs = [{
       transactionId: txId,
       toUser: userId,
@@ -101,7 +102,7 @@ async function creditWallet(
       status: 'completed',
       settlementStatus: 'pending',
       description: description,
-      ...extraTxFields
+      ...extraOpts
     }];
     const createdTx = session
       ? await Transaction.create(txDocs, { session })
@@ -227,7 +228,8 @@ async function debitWallet(
     await wallet.save();
   }
 
-  const txId = extraTxFields.transactionId || crypto.randomUUID();
+  const extraOpts = extraTxFields || {};
+  const txId = extraOpts.transactionId || crypto.randomUUID();
   const txDocs = [{
     transactionId: txId,
     fromUser: userId,
@@ -237,7 +239,7 @@ async function debitWallet(
     status: 'completed',
     settlementStatus: 'pending',
     description: description,
-    ...extraTxFields
+    ...extraOpts
   }];
 
   const tx = session
