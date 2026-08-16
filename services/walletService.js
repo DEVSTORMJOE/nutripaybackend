@@ -563,7 +563,7 @@ async function processMpesaDirectCustomOrder(checkoutRequestID, amountPaid, mpes
     isCustom: true
   }], session ? { session } : {});
 
-  return { order, studentWallet };
+  return { order, studentWallet, createdTx: tx[0] };
 }
 
 /**

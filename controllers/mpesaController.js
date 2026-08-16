@@ -284,7 +284,7 @@ const mpesaCallback = async (req, res) => {
                 // Successfully paid direct M-Pesa order!
                 const { amountPaid, mpesaReceiptNumber, phonePaidFrom } = callbackVerification;
                 
-                await walletService.processMpesaDirectCustomOrder(
+                const directRes = await walletService.processMpesaDirectCustomOrder(
                     customOrder.checkoutRequestID || checkoutRequestID,
                     amountPaid,
                     mpesaReceiptNumber,
@@ -297,6 +297,7 @@ const mpesaCallback = async (req, res) => {
                     needsMint: true,
                     amount: amountPaid,
                     mpesaReceiptNumber,
+                    transactionToUpdate: directRes?.createdTx?._id || directRes?.createdTx?.transactionId,
                     customOrderId: customOrder.orderId,
                     vendorId: customOrder.vendor
                 };

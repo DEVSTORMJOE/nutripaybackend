@@ -10,7 +10,14 @@ async function processStellarJob(jobData) {
   const { category, transactionId, amountKES } = jobData;
   console.log(`[Stellar Worker] Processing job for Transaction ID: ${transactionId}, Category: ${category}`);
 
-  const tx = await Transaction.findById(transactionId);
+  let tx = null;
+  if (require('mongoose').Types.ObjectId.isValid(transactionId)) {
+    tx = await Transaction.findById(transactionId);
+  }
+  if (!tx) {
+    tx = await Transaction.findOne({ transactionId: transactionId });
+  }
+
   if (!tx) {
     console.warn(`[Stellar Worker] Transaction with ID ${transactionId} not found in database. Skipping job.`);
     return null;
