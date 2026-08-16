@@ -43,7 +43,17 @@ async function initiateDeposit(userId, phone, amountKes, orderType = 'monthly_su
  * Verify webhook callback data dynamically based on provider
  */
 function verifyCallback(body, provider = null) {
-  if (provider === 'payhero' || body.payhero || body.external_reference) {
+  const payload = body?.response || body?.response_data || body || {};
+  const isPayHero =
+    provider === 'payhero' ||
+    body?.payhero ||
+    payload?.external_reference ||
+    payload?.checkout_id ||
+    payload?.status === 'SUCCESS' ||
+    payload?.status === 'FAILED' ||
+    payload?.status === 'QUEUED';
+
+  if (isPayHero) {
     return payheroService.verifyCallback(body);
   }
   // Default to M-Pesa callback parser

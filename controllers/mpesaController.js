@@ -61,19 +61,21 @@ const mpesaDeposit = async (req, res) => {
     }
 };
 
-// Safaricom Webhook Callback Handler
+// Safaricom & PayHero Webhook Callback Handler
 const mpesaCallback = async (req, res) => {
     try {
-        console.log("M-Pesa Callback Received:", JSON.stringify(req.body, null, 2));
+        console.log("M-Pesa / PayHero Callback Received:", JSON.stringify(req.body, null, 2));
         const userId = req.params.userId;
 
-        const callbackVerification = mpesaService.verifyCallback(req.body);
-        const { checkoutRequestID } = callbackVerification;
+        const paymentGatewayService = require('../services/paymentGatewayService');
+        const callbackVerification = paymentGatewayService.verifyCallback(req.body);
+        const { checkoutRequestID, externalReference } = callbackVerification;
         const merchantRequestID = req.body.Body?.stkCallback?.MerchantRequestID;
 
         // Perform early check for idempotency in Transaction collection
         const queryOr = [];
         if (checkoutRequestID) queryOr.push({ checkoutRequestId: checkoutRequestID });
+        if (externalReference) queryOr.push({ checkoutRequestId: externalReference });
         if (merchantRequestID) queryOr.push({ merchantRequestId: merchantRequestID });
         if (callbackVerification.success && callbackVerification.mpesaReceiptNumber) {
             queryOr.push({ paymentReference: callbackVerification.mpesaReceiptNumber });
@@ -94,9 +96,11 @@ const mpesaCallback = async (req, res) => {
         const result = await runInTransaction(async (session) => {
             // Check if this callback corresponds to a SponsorRequest
             const SponsorRequest = require('../models/SponsorRequest');
+            const sponsorQuery = [{ checkoutRequestID }];
+            if (externalReference) sponsorQuery.push({ checkoutRequestID: externalReference });
             const sponsorRequest = session
-                ? await SponsorRequest.findOne({ checkoutRequestID }).session(session)
-                : await SponsorRequest.findOne({ checkoutRequestID });
+                ? await SponsorRequest.findOne({ $or: sponsorQuery }).session(session)
+                : await SponsorRequest.findOne({ $or: sponsorQuery });
 
             if (sponsorRequest) {
                 const User = require('../models/User');
@@ -265,9 +269,11 @@ const mpesaCallback = async (req, res) => {
 
             // Check if this callback corresponds to an instant custom order
             const CustomOrder = require('../models/CustomOrder');
+            const customOrderQuery = [{ checkoutRequestID }];
+            if (externalReference) customOrderQuery.push({ checkoutRequestID: externalReference });
             const customOrder = session
-                ? await CustomOrder.findOne({ checkoutRequestID }).session(session)
-                : await CustomOrder.findOne({ checkoutRequestID });
+                ? await CustomOrder.findOne({ $or: customOrderQuery }).session(session)
+                : await CustomOrder.findOne({ $or: customOrderQuery });
 
             if (customOrder) {
                 if (!callbackVerification.success) {
@@ -281,7 +287,7 @@ const mpesaCallback = async (req, res) => {
                 const { amountPaid, mpesaReceiptNumber, phonePaidFrom } = callbackVerification;
                 
                 await walletService.processMpesaDirectCustomOrder(
-                    checkoutRequestID,
+                    customOrder.checkoutRequestID || checkoutRequestID,
                     amountPaid,
                     mpesaReceiptNumber,
                     phonePaidFrom,
@@ -300,9 +306,11 @@ const mpesaCallback = async (req, res) => {
 
             // Check if this callback corresponds to an N-Dash errand order
             const NDashOrder = require('../models/NDashOrder');
+            const ndashQuery = [{ checkoutRequestID }];
+            if (externalReference) ndashQuery.push({ checkoutRequestID: externalReference });
             const nDashOrder = session
-                ? await NDashOrder.findOne({ checkoutRequestID }).session(session)
-                : await NDashOrder.findOne({ checkoutRequestID });
+                ? await NDashOrder.findOne({ $or: ndashQuery }).session(session)
+                : await NDashOrder.findOne({ $or: ndashQuery });
 
             if (nDashOrder) {
                 if (!callbackVerification.success) {
@@ -315,16 +323,18 @@ const mpesaCallback = async (req, res) => {
                 // Successfully paid N-Dash order!
                 const { amountPaid, mpesaReceiptNumber, phonePaidFrom } = callbackVerification;
                 const ndashPaymentService = require('../services/ndashPaymentService');
-                await ndashPaymentService.processPaymentSuccess(checkoutRequestID, mpesaReceiptNumber, amountPaid, phonePaidFrom, session);
+                await ndashPaymentService.processPaymentSuccess(nDashOrder.checkoutRequestID || checkoutRequestID, mpesaReceiptNumber, amountPaid, phonePaidFrom, session);
 
                 return {
                     response: { ResponseCode: "0", ResponseDesc: "Success" }
                 };
             }
 
+            const depositQuery = [{ checkoutRequestID }];
+            if (externalReference) depositQuery.push({ checkoutRequestID: externalReference });
             let depositRecord = session
-                ? await MpesaDeposit.findOne({ checkoutRequestID }).session(session)
-                : await MpesaDeposit.findOne({ checkoutRequestID });
+                ? await MpesaDeposit.findOne({ $or: depositQuery }).session(session)
+                : await MpesaDeposit.findOne({ $or: depositQuery });
 
             if (!callbackVerification.success) {
                 console.log(`STK Push failed or cancelled. Message: ${callbackVerification.message}`);

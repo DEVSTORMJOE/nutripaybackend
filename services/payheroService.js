@@ -104,7 +104,8 @@ function verifyCallback(body) {
   const status = (payload.status || payload.Status || '').toUpperCase();
   const isSuccess = status === 'SUCCESS' || status === 'COMPLETED' || payload.success === true || payload.result_code === 0;
 
-  const checkoutRequestID = payload.CheckoutRequestID || payload.checkout_id || payload.reference || payload.external_reference || `PH_CB_${crypto.randomBytes(4).toString('hex')}`;
+  const checkoutRequestID = payload.CheckoutRequestID || payload.checkout_id || payload.reference || `PH_CB_${crypto.randomBytes(4).toString('hex')}`;
+  const externalReference = payload.external_reference || payload.externalReference || payload.merchant_reference || '';
   const amountPaid = Number(payload.amount || payload.Amount || 0);
   const mpesaReceiptNumber = payload.MpesaReceiptNumber || payload.mpesa_code || payload.receipt || `PH${crypto.randomBytes(4).toString('hex').toUpperCase()}`;
   const phonePaidFrom = payload.phone_number || payload.PhoneNumber || payload.phone || '';
@@ -114,6 +115,7 @@ function verifyCallback(body) {
       success: false,
       provider: "payhero",
       checkoutRequestID,
+      externalReference,
       resultCode: 1,
       message: payload.message || payload.ResultDesc || "PayHero transaction failed or cancelled"
     };
@@ -123,6 +125,7 @@ function verifyCallback(body) {
     success: true,
     provider: "payhero",
     checkoutRequestID,
+    externalReference,
     resultCode: 0,
     amountPaid,
     mpesaReceiptNumber,

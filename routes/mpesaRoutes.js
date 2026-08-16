@@ -12,8 +12,8 @@ router.get('/my-withdrawals', protect, getMyWithdrawalRequests);
 router.get('/status/:checkoutRequestID', protect, checkMpesaStatus);
 
 // Webhook hit by Safaricom or PayHero Servers (must be public)
-router.post('/callback/:userId', mpesaCallback);
-router.post('/payhero/callback/:userId', mpesaCallback);
+router.post('/callback/:userId?', mpesaCallback);
+router.post('/payhero/callback/:userId?', mpesaCallback);
 
 // B2C callback webhook for withdrawals
 router.post('/b2c-callback', mpesaB2CCallback);
