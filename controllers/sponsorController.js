@@ -470,17 +470,17 @@ const quickPayMpesa = async (req, res) => {
       );
     }
 
-    const mpesaService = require('../services/mpesaService');
+    const paymentGatewayService = require('../services/paymentGatewayService');
     const crypto = require('crypto');
 
     try {
-      const data = await mpesaService.initiateDeposit(sponsor._id, phone, request.amountKES);
-      const checkoutRequestID = data.CheckoutRequestID;
+      const data = await paymentGatewayService.initiateDeposit(sponsor._id, phone, request.amountKES, 'sponsorship');
+      const checkoutRequestID = data.CheckoutRequestID || data.checkout_id || data.checkoutRequestID;
       request.checkoutRequestID = checkoutRequestID;
       await request.save();
       res.json({ message: "STK Push sent successfully to your phone. Waiting for PIN...", checkoutRequestID });
     } catch (err) {
-      console.warn("Direct Safaricom STK Push failed, falling back to mock deposit in demo mode:", err.message);
+      console.warn("STK Push failed, falling back to mock deposit in demo mode:", err.message);
       const mockID = `ws_CO_Mock_${crypto.randomBytes(8).toString('hex')}`;
       request.checkoutRequestID = mockID;
       await request.save();
