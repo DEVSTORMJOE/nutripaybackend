@@ -1196,6 +1196,8 @@ async function customPlanSponsorCheckout(req, res) {
     const Delivery = require('../models/Delivery');
     const Meal = require('../models/Meal');
 
+    const today = req.body.startDate ? new Date(req.body.startDate) : new Date();
+
     // Clear out overlapping or future deliveries to overwrite cancelled/old ones
     await Delivery.deleteMany({
       student: userId,
@@ -1220,7 +1222,6 @@ async function customPlanSponsorCheckout(req, res) {
     if (supper || customSchedule) slots.push('Supper');
 
     const deliveriesToInsert = [];
-    const today = req.body.startDate ? new Date(req.body.startDate) : new Date();
 
     if (customSchedule) {
       const uniqueMealIds = new Set();
