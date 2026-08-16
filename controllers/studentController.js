@@ -14,7 +14,23 @@ const escrowService = require('../services/escrowService');
 const getDashboard = async (req, res) => {
   try {
     const studentId = req.user.id;
-    const subscription = await Subscription.findOne({ student: studentId, status: 'active' }).populate('meal');
+    let subscription = await Subscription.findOne({ student: studentId, status: 'active' }).populate('meal');
+    
+    // Auto-heal: If active subscription exists but 0 pending/assigned deliveries remain, mark as completed
+    if (subscription) {
+      const remainingPending = await Delivery.countDocuments({
+        student: studentId,
+        status: { $in: ['pending', 'assigned'] }
+      });
+      if (remainingPending === 0) {
+        subscription.status = 'completed';
+        subscription.endDate = new Date();
+        await subscription.save();
+        await Student.updateOne({ user: studentId }, { $set: { subscriptionActive: false } });
+        subscription = null;
+      }
+    }
+
     const wallet = await walletService.getOrCreateWallet(studentId, 'student');
     const studentProfile = await Student.findOne({ user: studentId });
 

@@ -153,8 +153,18 @@ async function checkoutCart(req, res) {
         startDate.setHours(6, 0, 0, 0);
       }
 
-      // endDate is durationDays from startDate (inclusive, durationDays-1 full days added)
-      const endDate = new Date(startDate.getTime() + (durationDays - 1) * 24 * 60 * 60 * 1000);
+      let actualDurationDays = durationDays;
+      if (monthlyTemplate.customSchedule) {
+        const scheduleKeys = Object.keys(monthlyTemplate.customSchedule);
+        if (scheduleKeys.length > 0) {
+          actualDurationDays = Math.max(1, scheduleKeys.length);
+        }
+      } else if (monthlyTemplate.durationDays) {
+        actualDurationDays = Math.max(1, Number(monthlyTemplate.durationDays));
+      }
+
+      // endDate is actualDurationDays from startDate (inclusive)
+      const endDate = new Date(startDate.getTime() + Math.max(0, actualDurationDays - 1) * 24 * 60 * 60 * 1000);
 
       const subscription = await Subscription.create({
         student: userId,
@@ -164,7 +174,7 @@ async function checkoutCart(req, res) {
         endDate: endDate,
         totalPaidKES: subtotalKes,
         billingCycle: billingCycle,
-        durationDays: durationDays
+        durationDays: actualDurationDays
       });
 
       // Clear out old unfulfilled or overlapping subscription deliveries for this student to prevent stale test data leaks

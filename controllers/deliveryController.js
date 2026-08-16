@@ -338,10 +338,34 @@ const markDelivered = async (req, res) => {
       }
     }
 
-    // ===== Existing delivery completion logic (unchanged) =====
     delivery.status = "delivered";
     delivery.deliveredAt = Date.now();
     await delivery.save();
+
+    // ===== Auto-complete active subscription if all deliveries are fulfilled =====
+    const studentId = delivery.student?._id || delivery.student;
+    if (studentId) {
+      const remainingPending = await Delivery.countDocuments({
+        student: studentId,
+        status: { $in: ['pending', 'assigned'] }
+      });
+
+      if (remainingPending === 0) {
+        const Subscription = require("../models/Subscription");
+        const Student = require("../models/Student");
+
+        await Subscription.updateMany(
+          { student: studentId, status: 'active' },
+          { $set: { status: 'completed', endDate: new Date() } }
+        );
+
+        await Student.updateOne(
+          { user: studentId },
+          { $set: { subscriptionActive: false } }
+        );
+        console.log(`[Subscription Service] All deliveries completed for student ${studentId}. Marked active subscription as completed.`);
+      }
+    }
 
     // ===== Existing notification logic (unchanged) =====
     const Notification = require("../models/Notification");
