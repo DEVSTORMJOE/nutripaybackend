@@ -417,72 +417,45 @@ async function splitCustomOrderRevenue(orderTotal, vendorUserId) {
 }
 
 /**
- * Process a custom order paid instantly from student wallet
+ * Process a custom order paid instantly from student wallet into Escrow (locked balance)
  */
 async function processWalletCustomOrder(userId, vendorUserId, items, totalCost, deliveryLocation, name, phone, session = null) {
-  // 1. Debit student wallet (checks availableBalanceKES >= totalCost inside debitWallet)
-  const debitResult = await debitWallet(
-    userId,
-    totalCost,
-    'custom_order',
-    'wallet',
-    `Custom order payment`,
-    false, // isSubscription = false
-    session
-  );
-  
-  // Set paymentSource for auditing
-  debitResult.transaction.paymentSource = 'student_wallet';
-  await debitResult.transaction.save(session ? { session } : {});
+  // 1. Lock funds in student wallet (moves available -> lockedBalanceKES)
+  const studentWallet = await lockFunds(userId, totalCost, session);
 
-  // 2. Split revenue
-  const { vendorShare, commission, platformCommissionPercent } = await splitCustomOrderRevenue(totalCost, vendorUserId);
-
-  // 3. Credit Vendor wallet available balance instantly
-  const creditResult = await creditWallet(
-    vendorUserId,
-    vendorShare,
-    'vendor_payout',
-    'wallet',
-    `Custom order payout`,
-    'self',
-    false,
-    'none',
-    session
-  );
-  creditResult.transaction.paymentSource = 'student_wallet';
-  await creditResult.transaction.save(session ? { session } : {});
-
-  // 4. Create commission transaction log in MongoDB
-  await Transaction.create([{
-    transactionId: crypto.randomUUID(),
-    fromUser: vendorUserId,
-    toUser: null,
-    amountKES: commission,
-    transactionCategory: 'commission',
+  // 2. Create custom order lock transaction in MongoDB
+  const txId = crypto.randomUUID();
+  const txDocs = [{
+    transactionId: txId,
+    fromUser: userId,
+    toUser: vendorUserId,
+    amountKES: mongoose.Types.Decimal128.fromString(parseFloat(totalCost).toFixed(2)),
+    transactionCategory: 'custom_order',
     paymentMethod: 'wallet',
     paymentSource: 'student_wallet',
+    orderType: 'custom',
     status: 'completed',
     settlementStatus: 'pending',
-    description: `Platform commission (${platformCommissionPercent}%) for custom order`
-  }], session ? { session } : {});
+    description: `Escrow lock for quick custom order`
+  }];
 
-  // Credit admin wallet for the commission
-  const Wallet = require('../models/Wallet');
-  const adminWallet = session
-    ? await Wallet.findOne({ walletType: 'admin' }).session(session)
-    : await Wallet.findOne({ walletType: 'admin' });
-  if (adminWallet) {
-    const currentAdminAvail = parseFloat(adminWallet.availableBalanceKES ? adminWallet.availableBalanceKES.toString() : '0');
-    adminWallet.availableBalanceKES = mongoose.Types.Decimal128.fromString((currentAdminAvail + parseFloat(commission)).toFixed(2));
-    await adminWallet.save(session ? { session } : {});
+  const tx = session
+    ? await Transaction.create(txDocs, { session })
+    : await Transaction.create(txDocs);
+
+  // 3. Queue on-chain transaction asynchronously to lock funds on Stellar
+  try {
+    const queueService = require('./queueService');
+    await queueService.addStellarJob('subscription_lock', tx[0]._id, { amountKES: totalCost });
+  } catch (queueErr) {
+    console.error("[Wallet Service] Failed to queue Stellar job for custom order lock:", queueErr.message);
   }
 
-  return { debitResult, creditResult, vendorShare, commission };
+  return { studentWallet, transaction: tx[0] };
 }
 
 /**
- * Process a successful direct M-Pesa custom order checkout
+ * Process a successful direct M-Pesa custom order checkout into Escrow (locked balance)
  */
 async function processMpesaDirectCustomOrder(checkoutRequestID, amountPaid, mpesaReceiptNumber, phonePaidFrom, session = null) {
   const CustomOrder = require('../models/CustomOrder');
@@ -498,69 +471,40 @@ async function processMpesaDirectCustomOrder(checkoutRequestID, amountPaid, mpes
   order.status = 'preparing';
   await order.save(session ? { session } : {});
 
-  // 2. Find vendor user
-  const Vendor = require('../models/Vendor');
-  const vendorProfile = session ? await Vendor.findById(order.vendor).session(session) : await Vendor.findById(order.vendor);
-  if (!vendorProfile) throw new Error("Vendor not found");
+  // 2. Lock M-Pesa funds into student wallet locked balance (Escrow)
+  const studentWallet = await getOrCreateWallet(order.user, 'student', session);
+  const currentLocked = parseFloat(studentWallet.lockedBalanceKES ? studentWallet.lockedBalanceKES.toString() : '0');
+  studentWallet.lockedBalanceKES = mongoose.Types.Decimal128.fromString((currentLocked + parseFloat(amountPaid)).toFixed(2));
+  await studentWallet.save(session ? { session } : {});
 
-  // 3. Split revenue
-  const { vendorShare, commission, platformCommissionPercent } = await splitCustomOrderRevenue(amountPaid, vendorProfile.user);
-
-  // 4. Credit vendor available balance instantly
-  const creditResult = await creditWallet(
-    vendorProfile.user,
-    vendorShare,
-    'vendor_payout',
-    'mpesa',
-    `Custom order direct M-Pesa payout (Receipt: ${mpesaReceiptNumber})`,
-    'self',
-    false,
-    'none',
-    session
-  );
-  creditResult.transaction.paymentSource = 'mpesa_direct';
-  await creditResult.transaction.save(session ? { session } : {});
-
-  // 5. Create platform commission transaction log in MongoDB
-  await Transaction.create([{
-    transactionId: crypto.randomUUID(),
-    fromUser: vendorProfile.user, // Vendor pays commission!
-    toUser: null, // to Platform/System
-    amountKES: commission,
-    transactionCategory: 'commission',
-    paymentMethod: 'mpesa',
-    paymentSource: 'mpesa_direct',
-    status: 'completed',
-    settlementStatus: 'pending',
-    description: `Platform commission (${platformCommissionPercent}%) for direct M-Pesa order (Receipt: ${mpesaReceiptNumber})`
-  }], session ? { session } : {});
-
-  // Credit admin wallet for the commission
-  const Wallet = require('../models/Wallet');
-  const adminWallet = session
-    ? await Wallet.findOne({ walletType: 'admin' }).session(session)
-    : await Wallet.findOne({ walletType: 'admin' });
-  if (adminWallet) {
-    const currentAdminAvail = parseFloat(adminWallet.availableBalanceKES ? adminWallet.availableBalanceKES.toString() : '0');
-    adminWallet.availableBalanceKES = mongoose.Types.Decimal128.fromString((currentAdminAvail + parseFloat(commission)).toFixed(2));
-    await adminWallet.save(session ? { session } : {});
-  }
-
-  // 6. Create custom order transaction log representing the user's direct payment
-  await Transaction.create([{
+  // 3. Create transaction log representing direct M-Pesa payment into Escrow
+  const txDocs = [{
     transactionId: crypto.randomUUID(),
     fromUser: order.user || null,
-    toUser: vendorProfile.user,
-    amountKES: amountPaid,
+    toUser: order.vendor,
+    amountKES: mongoose.Types.Decimal128.fromString(parseFloat(amountPaid).toFixed(2)),
     transactionCategory: 'mpesa_direct_order',
     paymentMethod: 'mpesa',
     paymentSource: 'mpesa_direct',
+    orderType: 'custom',
     status: 'completed',
     settlementStatus: 'pending',
     description: `Direct M-Pesa checkout for order ${order.orderId} (Receipt: ${mpesaReceiptNumber})`
-  }], session ? { session } : {});
+  }];
 
-  // 7. Create matching Delivery record for quick order
+  const tx = session
+    ? await Transaction.create(txDocs, { session })
+    : await Transaction.create(txDocs);
+
+  // 4. Queue on-chain transaction asynchronously to mint NutriTokens (NT) on Stellar
+  try {
+    const queueService = require('./queueService');
+    await queueService.addStellarJob('deposit', tx[0]._id, { amountKES: amountPaid });
+  } catch (queueErr) {
+    console.error("[Wallet Service] Failed to queue Stellar deposit job:", queueErr.message);
+  }
+
+  // 5. Create matching Delivery record for quick order (paymentReleased = false)
   const Student = require('../models/Student');
   const DeliveryLocation = require('../models/DeliveryLocation');
   const studentProfile = session ? await Student.findOne({ user: order.user }).session(session) : await Student.findOne({ user: order.user });
@@ -615,10 +559,11 @@ async function processMpesaDirectCustomOrder(checkoutRequestID, amountPaid, mpes
     })(),
     location: fullLocation || order.deliveryLocation || 'Campus',
     deliveryLocation: resolvedLocId || null,
+    paymentReleased: false,
     isCustom: true
   }], session ? { session } : {});
 
-  return { order, vendorShare, commission };
+  return { order, studentWallet };
 }
 
 /**

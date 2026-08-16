@@ -36,6 +36,7 @@ async function processStellarJob(jobData) {
       break;
       
     case 'subscription_lock':
+    case 'custom_order':
       newTxHash = await stellarTreasuryService.settleToEscrow(targetAmount);
       break;
       
