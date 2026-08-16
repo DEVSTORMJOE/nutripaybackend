@@ -320,8 +320,9 @@ const getRequestDetails = async (req, res) => {
 const quickPay = async (req, res) => {
   const { token } = req.body;
   try {
-    const request = await SponsorRequest.findOne({ token, status: 'pending' });
-    if (!request) return res.status(404).json({ message: "Active sponsorship request not found." });
+    const request = await SponsorRequest.findOne({ token });
+    if (!request) return res.status(404).json({ message: "Sponsorship request not found." });
+    if (request.status === 'paid') return res.status(400).json({ message: "This sponsorship request has already been paid." });
 
     // Let's resolve sponsor User account or create if missing
     let sponsor = await User.findOne({ email: request.sponsorEmail });
@@ -437,8 +438,9 @@ const quickPayMpesa = async (req, res) => {
       return res.status(400).json({ message: "Phone number is required." });
     }
 
-    const request = await SponsorRequest.findOne({ token, status: 'pending' });
-    if (!request) return res.status(404).json({ message: "Active sponsorship request not found." });
+    const request = await SponsorRequest.findOne({ token });
+    if (!request) return res.status(404).json({ message: "Sponsorship request not found." });
+    if (request.status === 'paid') return res.status(400).json({ message: "This sponsorship request has already been paid." });
 
     // Resolve sponsor or create if missing
     let sponsor = await User.findOne({ email: request.sponsorEmail });
