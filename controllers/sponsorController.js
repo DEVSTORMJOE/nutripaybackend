@@ -324,34 +324,9 @@ const quickPay = async (req, res) => {
     if (!request) return res.status(404).json({ message: "Sponsorship request not found." });
     if (request.status === 'paid') return res.status(400).json({ message: "This sponsorship request has already been paid." });
 
-    // Let's resolve sponsor User account or create if missing
     let sponsor = await User.findOne({ email: request.sponsorEmail });
     if (!sponsor) {
-      const crypto = require('crypto');
-      const generatedPassword = crypto.randomBytes(8).toString("hex");
-      sponsor = await User.create({
-        name: request.sponsorName,
-        email: request.sponsorEmail,
-        password: generatedPassword,
-        role: 'sponsor',
-        isApproved: true
-      });
-
-      const Sponsor = require('../models/Sponsor');
-      await Sponsor.create({
-        user: sponsor._id,
-        organizationName: request.sponsorName || "Sponsor",
-        contactPhone: ""
-      });
-      
-      // Credit mock funds
-      await walletService.creditWallet(
-        sponsor._id,
-        10000,
-        'deposit',
-        'wallet',
-        'Sponsor Mock Funding'
-      );
+      return res.status(400).json({ message: "Sponsor account not found. Please complete payment via M-Pesa STK Push." });
     }
 
     const sponsorId = sponsor._id;
@@ -359,16 +334,9 @@ const quickPay = async (req, res) => {
     const totalKes = request.amountKES;
     const deliveryIds = request.deliveryIds;
 
-    // Credit sponsor if they have insufficient balance
     const sponsorWallet = await Wallet.findOne({ user: sponsorId });
     if (!sponsorWallet || sponsorWallet.availableBalanceKES < totalKes) {
-      await walletService.creditWallet(
-        sponsorId,
-        totalKes,
-        'deposit',
-        'wallet',
-        'Auto Sponsor Funding for Quick Checkout'
-      );
+      return res.status(400).json({ message: "Insufficient wallet balance. Please complete payment using M-Pesa." });
     }
 
     // 1. Debit Sponsor
@@ -461,15 +429,6 @@ const quickPayMpesa = async (req, res) => {
         organizationName: request.sponsorName || "Sponsor",
         contactPhone: ""
       });
-
-      // Credit mock funds
-      await walletService.creditWallet(
-        sponsor._id,
-        10000,
-        'deposit',
-        'wallet',
-        'Sponsor Mock Funding'
-      );
     }
 
     const paymentGatewayService = require('../services/paymentGatewayService');
@@ -482,7 +441,13 @@ const quickPayMpesa = async (req, res) => {
       await request.save();
       res.json({ message: "STK Push sent successfully to your phone. Waiting for PIN...", checkoutRequestID });
     } catch (err) {
-      console.warn("STK Push failed, falling back to mock deposit in demo mode:", err.message);
+      console.error("STK Push failed:", err.message);
+      const isProduction = process.env.DARAJA_ENV === 'production' || (process.env.NODE_ENV === 'production' && process.env.DARAJA_ENV !== 'sandbox');
+      if (isProduction) {
+        return res.status(500).json({ message: 'M-Pesa STK Push failed: ' + (err.response?.data?.errorMessage || err.message) });
+      }
+
+      console.warn("STK Push failed, falling back to mock deposit in demo sandbox mode:", err.message);
       const mockID = `ws_CO_Mock_${crypto.randomBytes(8).toString('hex')}`;
       request.checkoutRequestID = mockID;
       await request.save();
@@ -505,8 +470,10 @@ const checkSponsorMpesaStatus = async (req, res) => {
       return res.status(404).json({ message: "Sponsorship request not found" });
     }
 
+    const isProduction = process.env.DARAJA_ENV === 'production' || (process.env.NODE_ENV === 'production' && process.env.DARAJA_ENV !== 'sandbox');
+
     // Auto-approve mock deposits in sandbox/demo environment immediately upon polling
-    if (request.status === 'pending' && checkoutRequestID.startsWith('ws_CO_Mock_')) {
+    if (!isProduction && request.status === 'pending' && checkoutRequestID.startsWith('ws_CO_Mock_')) {
       console.log(`[Mock Sponsor Deposit] Auto-approving mock deposit of ${request.amountKES} KES`);
       const mockReceipt = "MOCK_DEP_" + Math.random().toString(36).substring(4).toUpperCase();
       

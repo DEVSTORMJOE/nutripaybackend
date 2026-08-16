@@ -497,14 +497,6 @@ async function addSponsorCheckout(req, res) {
         password: generatedPassword, 
         role: "sponsor",
       });
-      
-      await walletService.creditWallet(
-        sponsor._id,
-        10000,
-        'deposit',
-        'wallet',
-        'Initial Sponsor Signup Mock Funding'
-      );
     }
 
     // Link sponsor to student and vice versa
@@ -1098,14 +1090,6 @@ async function customPlanSponsorCheckout(req, res) {
         role: "sponsor",
         phone: sponsorPhone || ""
       });
-      
-      await walletService.creditWallet(
-        sponsor._id,
-        10000,
-        'deposit',
-        'wallet',
-        'Initial Sponsor Signup Mock Funding'
-      );
     }
 
     // Link sponsor to student and vice versa
