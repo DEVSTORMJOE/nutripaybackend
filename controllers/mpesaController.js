@@ -69,14 +69,10 @@ const mpesaCallback = async (req, res) => {
 
         const paymentGatewayService = require('../services/paymentGatewayService');
         const callbackVerification = paymentGatewayService.verifyCallback(req.body);
-        const { checkoutRequestID, externalReference } = callbackVerification;
-        const merchantRequestID = req.body.Body?.stkCallback?.MerchantRequestID;
+        const { checkoutRequestID, merchantRequestID, externalReference } = callbackVerification;
 
         // Perform early check for idempotency in Transaction collection
         const queryOr = [];
-        if (checkoutRequestID) queryOr.push({ checkoutRequestId: checkoutRequestID });
-        if (externalReference) queryOr.push({ checkoutRequestId: externalReference });
-        if (merchantRequestID) queryOr.push({ merchantRequestId: merchantRequestID });
         if (callbackVerification.success && callbackVerification.mpesaReceiptNumber) {
             queryOr.push({ paymentReference: callbackVerification.mpesaReceiptNumber });
         }
@@ -84,7 +80,7 @@ const mpesaCallback = async (req, res) => {
         if (queryOr.length > 0) {
             const existingTx = await Transaction.findOne({ $or: queryOr });
             if (existingTx) {
-                console.log(`[Idempotency Warning] Webhook already processed. checkoutRequestID: ${checkoutRequestID}`);
+                console.log(`[Idempotency Warning] Webhook already processed for payment reference: ${callbackVerification.mpesaReceiptNumber}`);
                 return res.json({ ResponseCode: "0", ResponseDesc: "Success" });
             }
         }

@@ -67,7 +67,7 @@ async function initiateDeposit(userId, phone, amountKes, orderType = 'monthly_su
     return {
       success: response.data.status === 'SUCCESS' || response.data.success === true || response.data.code === 200,
       provider: "payhero",
-      CheckoutRequestID: response.data.reference || response.data.checkout_id || `PH_${crypto.randomBytes(6).toString('hex')}`,
+      CheckoutRequestID: response.data.checkout_id || response.data.CheckoutRequestID || response.data.MerchantRequestID || response.data.reference || `PH_${crypto.randomBytes(6).toString('hex')}`,
       reference,
       ResponseCode: "0",
       CustomerMessage: response.data.message || "PayHero STK Push initiated successfully",
