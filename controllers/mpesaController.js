@@ -103,7 +103,7 @@ const mpesaCallback = async (req, res) => {
                 const User = require('../models/User');
                 if (!callbackVerification.success) {
                     console.log(`M-Pesa STK Push for sponsor request ${sponsorRequest.token} failed or cancelled.`);
-                    sponsorRequest.status = 'failed';
+                    sponsorRequest.status = callbackVerification.resultCode === 1032 ? 'cancelled' : 'failed';
                     await sponsorRequest.save(session ? { session } : {});
                     const errorLogger = require('../utils/errorLogger');
                     await errorLogger.logError('mpesa', `Sponsor request STK Push payment failed/cancelled for ${sponsorRequest.sponsorEmail}`, {

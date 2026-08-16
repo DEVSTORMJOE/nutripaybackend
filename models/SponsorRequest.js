@@ -33,7 +33,7 @@ const sponsorRequestSchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ['pending', 'paid', 'expired'],
+    enum: ['pending', 'paid', 'expired', 'failed', 'cancelled'],
     default: 'pending'
   },
   planId: {
