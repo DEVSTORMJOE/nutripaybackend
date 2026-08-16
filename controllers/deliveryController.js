@@ -377,7 +377,11 @@ const markDelivered = async (req, res) => {
       // Student SMS
       if (studentPhone) {
         const orderIdStr = delivery?.orderId || (delivery?._id ? delivery._id.toString().slice(-8).toUpperCase() : '');
-        const msgStudent = `NutriPay: Your order ${orderIdStr ? '#' + orderIdStr + ' ' : ''}is delivered.`;
+        const msgStudent =
+          `NutriPay: Your order ${orderIdStr ? '#' + orderIdStr + ' ' : ''}is delivered.\n` +
+          `Meal: ${dateLabel}${timeSlot ? " • " + timeSlot : ""}\n` +
+          `Amount: ${amount}\n` +
+          `Delivered by: ${driverName}`;
 
         try {
           await sendText(studentPhone, msgStudent);
@@ -390,7 +394,7 @@ const markDelivered = async (req, res) => {
       if (vendorPhone) {
         const studentName = safeStr(delivery?.student?.name) || "Student";
         const msgVendor =
-          `NutriPay: Delivery completed ✅\n` +
+          `NutriPay: Delivery completed\n` +
           `Student: ${studentName}\n` +
           `Meal: ${dateLabel}${timeSlot ? " • " + timeSlot : ""}\n` +
           `Amount: ${amount}`;
