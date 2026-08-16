@@ -230,6 +230,7 @@ async function withdrawRevenueToTreasury(amountKes) {
 
 module.exports = {
   createTrustline,
+  performPlatformTransfer,
   mintNT,
   settleToEscrow,
   releaseVendorSettlement,

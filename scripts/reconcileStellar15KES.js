@@ -64,6 +64,15 @@ async function reconcile15KESOrder() {
       }
     }
 
+    // Reset all vendor wallets to 0 first to prevent stale accumulated totals
+    const Vendor = require('../models/Vendor');
+    const allVendors = await Vendor.find({});
+    const vendorUserIds = allVendors.map(v => v.user);
+    await Wallet.updateMany(
+      { user: { $in: vendorUserIds } },
+      { $set: { availableBalanceKES: mongoose.Types.Decimal128.fromString("0.00"), lockedBalanceKES: mongoose.Types.Decimal128.fromString("0.00"), tokenBalanceNT: mongoose.Types.Decimal128.fromString("0.00") } }
+    );
+
     if (vendorUser) {
       const vendorWallet = await Wallet.findOne({ user: vendorUser._id });
       if (vendorWallet) {
