@@ -162,7 +162,7 @@ const mpesaCallback = async (req, res) => {
                     `Subscription quick sponsor funding for student: ${sponsorRequest.student}`,
                     false,
                     session,
-                    { paymentReference: mpesaReceiptNumber }
+                    { externalReference: mpesaReceiptNumber }
                 );
 
                 // Credit student wallet
@@ -177,7 +177,7 @@ const mpesaCallback = async (req, res) => {
                     'subscription_only',
                     session,
                     false,
-                    { paymentReference: mpesaReceiptNumber }
+                    { externalReference: mpesaReceiptNumber }
                 );
                 creditRes.transaction.paymentSource = 'sponsor_funds';
                 await creditRes.transaction.save(session ? { session } : {});
