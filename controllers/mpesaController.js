@@ -317,6 +317,102 @@ const mpesaCallback = async (req, res) => {
                 };
             }
 
+            // Check if this callback corresponds to a Custom Plan Subscription STK push
+            const CheckoutRequest = require('../models/CheckoutRequest');
+            const customPlanQuery = [{ checkoutRequestId: checkoutRequestID }];
+            if (merchantRequestID) customPlanQuery.push({ checkoutRequestId: merchantRequestID });
+            if (externalReference) customPlanQuery.push({ checkoutRequestId: externalReference });
+            const customPlanRequest = session
+                ? await CheckoutRequest.findOne({ $or: customPlanQuery }).session(session)
+                : await CheckoutRequest.findOne({ $or: customPlanQuery });
+
+            if (customPlanRequest && customPlanRequest.metadata && customPlanRequest.metadata.type === 'custom_plan_sub') {
+                if (!callbackVerification.success) {
+                    console.log(`[Custom Plan M-Pesa Callback] STK Push for custom plan subscription failed or cancelled.`);
+                    customPlanRequest.status = 'failed';
+                    await customPlanRequest.save(session ? { session } : {});
+                    return { response: { ResponseCode: "0", ResponseDesc: "Success" } };
+                }
+
+                // Successfully paid Custom Plan Subscription!
+                const { amountPaid, mpesaReceiptNumber, phonePaidFrom } = callbackVerification;
+                const studentId = customPlanRequest.user || customPlanRequest.metadata.userId;
+
+                // 1. Credit student wallet (deposit)
+                const extraFields = {
+                    checkoutRequestId: checkoutRequestID,
+                    merchantRequestId: merchantRequestID,
+                    paymentReference: mpesaReceiptNumber
+                };
+                await walletService.creditWallet(
+                    studentId,
+                    amountPaid,
+                    'deposit',
+                    'mpesa',
+                    `M-Pesa Custom Plan Deposit (Receipt: ${mpesaReceiptNumber})`,
+                    'self',
+                    false,
+                    'none',
+                    session,
+                    false,
+                    extraFields
+                );
+
+                // 2. Debit student wallet (subscription funding)
+                const debitRes = await walletService.debitWallet(
+                    studentId,
+                    amountPaid,
+                    'funding',
+                    'wallet',
+                    `Custom Plan Subscription payment (${customPlanRequest.metadata.daysCount || 30} Days)`,
+                    false,
+                    session,
+                    { externalReference: mpesaReceiptNumber }
+                );
+
+                // 3. Create Subscription and Schedule Deliveries server-side!
+                const subscription = await subscriptionService.createCustomPlanSubscription({
+                    userId: studentId,
+                    totalCost: amountPaid,
+                    daysCount: customPlanRequest.metadata.daysCount,
+                    startDate: customPlanRequest.metadata.startDate,
+                    breakfast: customPlanRequest.metadata.breakfast,
+                    lunch: customPlanRequest.metadata.lunch,
+                    supper: customPlanRequest.metadata.supper,
+                    breakfastMealId: customPlanRequest.metadata.breakfastMealId,
+                    lunchMealId: customPlanRequest.metadata.lunchMealId,
+                    supperMealId: customPlanRequest.metadata.supperMealId,
+                    customSchedule: customPlanRequest.metadata.customSchedule,
+                    session
+                });
+
+                customPlanRequest.status = 'completed';
+                customPlanRequest.paymentReference = mpesaReceiptNumber;
+                await customPlanRequest.save(session ? { session } : {});
+
+                // Emit real-time notification to student room
+                try {
+                    const io = req.app.get('socketio');
+                    if (io) {
+                        io.to(`user_${studentId}`).emit('subscription_activated', {
+                            subscriptionId: subscription._id,
+                            message: "Custom Meal Plan subscribed and scheduled successfully!"
+                        });
+                        console.log(`Socket notification emitted to user_${studentId} for custom plan activation`);
+                    }
+                } catch (sErr) {
+                    console.error("Failed to emit socket notification for custom plan activation:", sErr);
+                }
+
+                return {
+                    response: { ResponseCode: "0", ResponseDesc: "Success" },
+                    needsMint: true,
+                    amount: amountPaid,
+                    mpesaReceiptNumber,
+                    transactionToUpdate: debitRes?.transaction?._id || debitRes?.createdTx?._id
+                };
+            }
+
             const depositQuery = [{ checkoutRequestID }];
             if (merchantRequestID) depositQuery.push({ checkoutRequestID: merchantRequestID });
             if (externalReference) depositQuery.push({ checkoutRequestID: externalReference });

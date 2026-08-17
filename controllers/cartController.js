@@ -861,7 +861,7 @@ async function addSponsorCheckout(req, res) {
 }
 
 async function customPlanCheckout(req, res) {
-  const { daysCount, breakfast, lunch, supper, totalCost, breakfastMealId, lunchMealId, supperMealId, customSchedule } = req.body;
+  const { daysCount, breakfast, lunch, supper, totalCost, breakfastMealId, lunchMealId, supperMealId, customSchedule, startDate } = req.body;
   try {
     const userId = req.user.id;
 
@@ -881,146 +881,21 @@ async function customPlanCheckout(req, res) {
       return res.status(400).json({ message: "Total cost must be greater than 0" });
     }
 
-    // 1. Lock subscription funds using the Escrow Service
-    const lockResult = await escrowService.lockSubscriptionFunds(userId, totalCost, null);
-
-    // 2. Create the Custom Subscriptions in MongoDB
-    const Student = require('../models/Student');
-    const studentProfile = await Student.findOne({ user: userId }).populate('deliveryLocation');
-    
-    // Save student subscription state
-    if (studentProfile) {
-      studentProfile.subscriptionActive = true;
-      await studentProfile.save();
-    }
-
-    // Create an active Subscription record
-    const Subscription = require('../models/Subscription');
-    const today = req.body.startDate ? new Date(req.body.startDate) : new Date();
-    const endDate = new Date(today.getTime() + daysCount * 24 * 60 * 60 * 1000);
-    const subscription = await Subscription.create({
-      student: userId,
-      planId: 'custom',
-      status: 'active',
-      startDate: today,
-      endDate: endDate,
-      totalPaidKES: totalCost
+    const subscription = await subscriptionService.createCustomPlanSubscription({
+      userId,
+      totalCost,
+      daysCount,
+      startDate,
+      breakfast,
+      lunch,
+      supper,
+      breakfastMealId,
+      lunchMealId,
+      supperMealId,
+      customSchedule
     });
 
-    // 3. Schedule the custom deliveries day by day
-    const Delivery = require('../models/Delivery');
-
-    // Clear out overlapping or future deliveries to overwrite cancelled/old ones
-    await Delivery.deleteMany({
-      student: userId,
-      scheduledDate: { $gte: today }
-    });
-    const Meal = require('../models/Meal');
-    
-    // Find default approved meals
-    const approvedMeals = await Meal.find({ approvalStatus: 'approved' }).lean();
-    if (approvedMeals.length === 0) {
-      return res.status(400).json({ message: "No approved meals available in the system yet." });
-    }
-    const defaultMeal = approvedMeals[0];
-    const defaultVendor = defaultMeal.vendor;
-
-    const breakfastMeal = breakfastMealId ? await Meal.findById(breakfastMealId).lean() : null;
-    const lunchMeal = lunchMealId ? await Meal.findById(lunchMealId).lean() : null;
-    const supperMeal = supperMealId ? await Meal.findById(supperMealId).lean() : null;
-
-    const slots = [];
-    if (breakfast || customSchedule) slots.push('Breakfast');
-    if (lunch || customSchedule) slots.push('Lunch');
-    if (supper || customSchedule) slots.push('Supper');
-
-    const deliveriesToInsert = [];
-    const locationName = studentProfile?.deliveryLocation ? studentProfile.deliveryLocation.hostelResidence || 'Campus' : 'Campus';
-    const deliveryLocationId = studentProfile?.deliveryLocation?._id || null;
-
-    if (customSchedule) {
-      const uniqueMealIds = new Set();
-      for (let dayOffset = 0; dayOffset < daysCount; dayOffset++) {
-        const dayConfig = Array.isArray(customSchedule) ? customSchedule[dayOffset] : customSchedule[String(dayOffset)] || customSchedule[dayOffset];
-        if (dayConfig) {
-          if (dayConfig.breakfast) uniqueMealIds.add(dayConfig.breakfast.toString());
-          if (dayConfig.lunch) uniqueMealIds.add(dayConfig.lunch.toString());
-          if (dayConfig.supper) uniqueMealIds.add(dayConfig.supper.toString());
-        }
-      }
-
-      const fetchedMeals = await Meal.find({ _id: { $in: Array.from(uniqueMealIds) } }).lean();
-      const mealMap = {};
-      for (const m of fetchedMeals) {
-        mealMap[m._id.toString()] = m;
-      }
-
-      for (let dayOffset = 0; dayOffset < daysCount; dayOffset++) {
-        const scheduledDate = new Date(today.getTime() + dayOffset * 24 * 60 * 60 * 1000);
-        const dayConfig = Array.isArray(customSchedule) ? customSchedule[dayOffset] : customSchedule[String(dayOffset)] || customSchedule[dayOffset];
-
-        for (const slot of slots) {
-          let matchingMeal = null;
-          if (dayConfig) {
-            const customizedMealId = dayConfig[slot.toLowerCase()] || dayConfig[slot];
-            if (customizedMealId) {
-              matchingMeal = mealMap[customizedMealId.toString()];
-            }
-          }
-
-          if (!matchingMeal) {
-            // In customSchedule, if no meal was selected for this slot, do not schedule a delivery.
-            continue;
-          }
-
-          deliveriesToInsert.push({
-            student: userId,
-            subscription: subscription._id,
-            vendor: matchingMeal.vendor || defaultVendor,
-            items: [{ name: matchingMeal.name, quantity: 1 }],
-            status: 'pending',
-            totalCost: Number(matchingMeal.price || 150),
-            timeSlot: slot,
-            scheduledDate: scheduledDate,
-            location: locationName,
-            deliveryLocation: deliveryLocationId
-          });
-        }
-      }
-    } else {
-      for (let dayOffset = 0; dayOffset < daysCount; dayOffset++) {
-        const scheduledDate = new Date(today.getTime() + dayOffset * 24 * 60 * 60 * 1000);
-        for (const slot of slots) {
-          let matchingMeal = null;
-          if (slot === 'Breakfast') matchingMeal = breakfastMeal;
-          else if (slot === 'Lunch') matchingMeal = lunchMeal;
-          else if (slot === 'Supper') matchingMeal = supperMeal;
-
-          if (!matchingMeal) {
-            matchingMeal = approvedMeals.find(m => m.category === (slot === 'Breakfast' ? 'drink' : 'main')) || defaultMeal;
-          }
-
-          deliveriesToInsert.push({
-            student: userId,
-            subscription: subscription._id,
-            vendor: matchingMeal.vendor || defaultVendor,
-            items: [{ name: matchingMeal.name, quantity: 1 }],
-            status: 'pending',
-            totalCost: Number(matchingMeal.price || 150),
-            timeSlot: slot,
-            scheduledDate: scheduledDate,
-            location: locationName,
-            deliveryLocation: deliveryLocationId
-          });
-        }
-      }
-    }
-
-    if (deliveriesToInsert.length > 0) {
-      await Delivery.create(deliveriesToInsert);
-    }
-
-    // 4. Clear Cart
+    // Clear Cart
     const CartModel = require('../models/Cart');
     await CartModel.findOneAndUpdate({ user: userId }, { schedule: {} });
 
@@ -1032,6 +907,84 @@ async function customPlanCheckout(req, res) {
   } catch (err) {
     console.error("Custom plan checkout failed:", err);
     res.status(500).json({ message: "Custom plan checkout failed: " + err.message });
+  }
+}
+
+async function customPlanMpesaCheckout(req, res) {
+  const { phone, daysCount, breakfast, lunch, supper, totalCost, breakfastMealId, lunchMealId, supperMealId, customSchedule, startDate } = req.body;
+  try {
+    const userId = req.user.id;
+
+    // Enforce single active subscription constraint
+    const existingActiveSubscription = await subscriptionService.checkAndAutoCompleteSubscriptions(userId);
+    if (existingActiveSubscription) {
+      return res.status(400).json({ message: "You already have an active subscription in progress. You cannot check out another plan until your current plan is completed or opted out." });
+    }
+
+    if (!phone) {
+      return res.status(400).json({ message: "M-Pesa phone number is required" });
+    }
+
+    const { validateAndNormalizePhone } = require('../utils/phoneValidator');
+    const validatedPhone = validateAndNormalizePhone(phone);
+    if (!validatedPhone) {
+      return res.status(400).json({ message: "Invalid M-Pesa phone number" });
+    }
+
+    if (!daysCount || daysCount <= 0) {
+      return res.status(400).json({ message: "Days count must be greater than 0" });
+    }
+    if (!breakfast && !lunch && !supper && !customSchedule) {
+      return res.status(400).json({ message: "At least one meal slot must be selected" });
+    }
+    if (!totalCost || totalCost <= 0) {
+      return res.status(400).json({ message: "Total cost must be greater than 0" });
+    }
+
+    const externalReference = `custom_plan_sub_${userId}_${Date.now()}`;
+    const payheroService = require('../services/payheroService');
+    const stkResult = await payheroService.initiateSTKPush(
+      validatedPhone,
+      Number(totalCost),
+      externalReference,
+      `Custom Plan (${daysCount} Days)`
+    );
+
+    if (!stkResult || !stkResult.CheckoutRequestID) {
+      return res.status(400).json({ message: "Failed to initiate M-Pesa STK push. Please try again." });
+    }
+
+    const CheckoutRequest = require('../models/CheckoutRequest');
+    await CheckoutRequest.create({
+      checkoutRequestId: stkResult.CheckoutRequestID,
+      merchantRequestId: stkResult.MerchantRequestID || stkResult.CheckoutRequestID,
+      amountKES: Number(totalCost),
+      user: userId,
+      status: 'pending',
+      metadata: {
+        type: 'custom_plan_sub',
+        userId,
+        daysCount,
+        breakfast,
+        lunch,
+        supper,
+        totalCost,
+        breakfastMealId,
+        lunchMealId,
+        supperMealId,
+        customSchedule,
+        startDate
+      }
+    });
+
+    res.json({
+      success: true,
+      checkoutRequestID: stkResult.CheckoutRequestID,
+      message: "M-Pesa STK push initiated. Please enter your PIN on your phone to complete your subscription."
+    });
+  } catch (err) {
+    console.error("Custom plan M-Pesa checkout failed:", err);
+    res.status(500).json({ message: "Custom plan M-Pesa checkout failed: " + err.message });
   }
 }
 
@@ -1429,4 +1382,4 @@ async function dailyTemplateCheckout(req, res) {
   }
 }
 
-module.exports = { getCart, replaceCart, clearCart, checkoutCart, addSponsorCheckout, customPlanCheckout, customPlanSponsorCheckout, dailyTemplateCheckout };
+module.exports = { getCart, replaceCart, clearCart, checkoutCart, addSponsorCheckout, customPlanCheckout, customPlanMpesaCheckout, customPlanSponsorCheckout, dailyTemplateCheckout };
