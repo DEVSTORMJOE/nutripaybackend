@@ -9,6 +9,7 @@ const crypto = require("crypto");
 const { sendMail } = require("../utils/mailer");
 const walletService = require("../services/walletService");
 const escrowService = require("../services/escrowService");
+const subscriptionService = require("../services/subscriptionService");
 const SponsorRequest = require("../models/SponsorRequest");
 
 async function getCart(req, res) {
@@ -93,10 +94,10 @@ async function checkoutCart(req, res) {
       const Student = require('../models/Student');
 
       // Enforce single active subscription constraint atomically to mitigate concurrent checkout races (Double Checkout)
-      // Double-check active subscription in DB first
-      const existingActiveSubscription = await SubscriptionModel.findOne({ student: userId, status: 'active' });
+      // Auto-complete active subscription if all deliveries are already fulfilled
+      const existingActiveSubscription = await subscriptionService.checkAndAutoCompleteSubscriptions(userId);
       if (existingActiveSubscription) {
-        return res.status(400).json({ message: "You already have an active subscription. You cannot check out another plan until you opt out of the current one." });
+        return res.status(400).json({ message: "You already have an active subscription in progress. You cannot check out another plan until your current plan is completed or opted out." });
       }
 
       let studentProfile = await Student.findOne({ user: userId }).populate('deliveryLocation');
@@ -865,10 +866,9 @@ async function customPlanCheckout(req, res) {
     const userId = req.user.id;
 
     // Enforce single active subscription constraint
-    const SubscriptionModel = require('../models/Subscription');
-    const existingActiveSubscription = await SubscriptionModel.findOne({ student: userId, status: 'active' });
+    const existingActiveSubscription = await subscriptionService.checkAndAutoCompleteSubscriptions(userId);
     if (existingActiveSubscription) {
-      return res.status(400).json({ message: "You already have an active subscription. You cannot check out another plan until you opt out of the current one." });
+      return res.status(400).json({ message: "You already have an active subscription in progress. You cannot check out another plan until your current plan is completed or opted out." });
     }
 
     if (!daysCount || daysCount <= 0) {
@@ -1053,10 +1053,9 @@ async function customPlanSponsorCheckout(req, res) {
     const userId = req.user.id;
 
     // Enforce single active subscription constraint
-    const SubscriptionModel = require('../models/Subscription');
-    const existingActiveSubscription = await SubscriptionModel.findOne({ student: userId, status: 'active' });
+    const existingActiveSubscription = await subscriptionService.checkAndAutoCompleteSubscriptions(userId);
     if (existingActiveSubscription) {
-      return res.status(400).json({ message: "You already have an active subscription. You cannot check out another plan until you opt out of the current one." });
+      return res.status(400).json({ message: "You already have an active subscription in progress. You cannot check out another plan until your current plan is completed or opted out." });
     }
 
     if (!sponsorName || !sponsorEmail) {

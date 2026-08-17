@@ -7,6 +7,7 @@ const Transaction = require('../models/Transaction');
 const Student = require('../models/Student');
 const walletService = require('../services/walletService');
 const escrowService = require('../services/escrowService');
+const subscriptionService = require('../services/subscriptionService');
 
 // @desc    Get student dashboard stats
 // @route   GET /api/student/dashboard
@@ -14,22 +15,8 @@ const escrowService = require('../services/escrowService');
 const getDashboard = async (req, res) => {
   try {
     const studentId = req.user.id;
-    let subscription = await Subscription.findOne({ student: studentId, status: 'active' }).populate('meal');
-    
-    // Auto-heal: If active subscription exists but 0 pending/assigned deliveries remain, mark as completed
-    if (subscription) {
-      const remainingPending = await Delivery.countDocuments({
-        student: studentId,
-        status: { $in: ['pending', 'assigned'] }
-      });
-      if (remainingPending === 0) {
-        subscription.status = 'completed';
-        subscription.endDate = new Date();
-        await subscription.save();
-        await Student.updateOne({ user: studentId }, { $set: { subscriptionActive: false } });
-        subscription = null;
-      }
-    }
+    // Auto-heal & auto-complete subscriptions with 0 remaining unfulfilled deliveries
+    let subscription = await subscriptionService.checkAndAutoCompleteSubscriptions(studentId);
 
     const wallet = await walletService.getOrCreateWallet(studentId, 'student');
     const studentProfile = await Student.findOne({ user: studentId });
@@ -131,14 +118,13 @@ const optOut = async (req, res) => {
     const studentWallet = await Wallet.findOne({ user: studentId });
     if (!studentWallet) return res.status(404).json({ message: 'Student wallet not found' });
 
-    // Find active subscription
-    const subscription = await Subscription.findOne({ student: studentId, status: 'active' });
+    // Auto-complete active subscription if all deliveries are fulfilled
+    let subscription = await subscriptionService.checkAndAutoCompleteSubscriptions(studentId);
     
     // Find unfulfilled deliveries belonging to the active subscription before the preparation stage
     const deliveryQuery = {
       student: studentId,
-      status: { $in: ['pending', 'assigned'] },
-      isCustom: { $ne: true },
+      status: { $in: ['pending', 'assigned', 'preparing', 'ready', 'picked_up'] },
       isDonated: { $ne: true }
     };
     if (subscription) {
@@ -150,7 +136,7 @@ const optOut = async (req, res) => {
     const pendingDeliveries = await Delivery.find(deliveryQuery);
 
     if (!subscription && pendingDeliveries.length === 0) {
-      return res.status(400).json({ message: 'No active subscription or unfulfilled deliveries to opt out from.' });
+      return res.status(400).json({ message: 'No active subscription or unfulfilled deliveries to opt out from. Your plan has been completed.' });
     }
 
     // Freeze Wallet to show 'refund_pending' progress banner on frontend
