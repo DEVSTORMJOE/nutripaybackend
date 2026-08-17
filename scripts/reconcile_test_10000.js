@@ -12,12 +12,12 @@ async function reconcile10000() {
   await mongoose.connect(process.env.MONGO_URI || "mongodb+srv://mainafrank400_db_user:N7Og3gx1cvVI0AnS@nutri.xyyf1zm.mongodb.net/?appName=nutri");
   console.log("Connected to MongoDB.");
 
-  // 1. Flag the test transaction in MongoDB
+  // 1. Flag the test transaction as synced in MongoDB so batch jobs skip it
   const tx = await Transaction.findById('6a81bf983546bd2bd650a826');
   if (tx) {
-    tx.settlementStatus = 'ignored_test';
+    tx.settlementStatus = 'synced';
     await tx.save();
-    console.log("✅ Updated test transaction 6a81bf983546bd2bd650a826 settlementStatus = 'ignored_test'");
+    console.log("✅ Updated test transaction 6a81bf983546bd2bd650a826 settlementStatus = 'synced'");
   }
 
   const platformPublics = stellarTreasuryService.platformWallets;
