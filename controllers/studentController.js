@@ -228,9 +228,14 @@ const getDeliverySchedule = async (req, res) => {
     const activeSub = await Subscription.findOne({ student: req.user.id, status: 'active' });
     const query = { student: req.user.id, isCustom: { $ne: true } };
     if (activeSub) {
+      const subStartDate = activeSub.startDate || activeSub.createdAt;
+      const startOfDay = new Date(subStartDate);
+      startOfDay.setHours(0, 0, 0, 0);
+
       query.$or = [
         { subscription: activeSub._id },
-        { subscription: { $exists: false }, createdAt: { $gte: activeSub.createdAt || activeSub.startDate } }
+        { subscription: { $exists: false }, scheduledDate: { $gte: startOfDay } },
+        { subscription: null, scheduledDate: { $gte: startOfDay } }
       ];
     }
     const deliveries = await Delivery.find(query)

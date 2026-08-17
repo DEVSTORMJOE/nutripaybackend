@@ -975,6 +975,7 @@ async function customPlanCheckout(req, res) {
 
           deliveriesToInsert.push({
             student: userId,
+            subscription: subscription._id,
             vendor: matchingMeal.vendor || defaultVendor,
             items: [{ name: matchingMeal.name, quantity: 1 }],
             status: 'pending',
@@ -1001,6 +1002,7 @@ async function customPlanCheckout(req, res) {
 
           deliveriesToInsert.push({
             student: userId,
+            subscription: subscription._id,
             vendor: matchingMeal.vendor || defaultVendor,
             items: [{ name: matchingMeal.name, quantity: 1 }],
             status: 'pending',

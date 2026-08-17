@@ -198,14 +198,6 @@ const mpesaCallback = async (req, res) => {
                 // Immediately lock subscription funds
                 await escrowService.lockSubscriptionFunds(sponsorRequest.student, amountPaid, sponsor._id, session);
 
-                // Update Deliveries status to pending
-                const Delivery = require('../models/Delivery');
-                if (session) {
-                    await Delivery.updateMany({ _id: { $in: sponsorRequest.deliveryIds } }, { $set: { status: 'pending' } }).session(session);
-                } else {
-                    await Delivery.updateMany({ _id: { $in: sponsorRequest.deliveryIds } }, { $set: { status: 'pending' } });
-                }
-
                 // Create active subscription
                 const Subscription = require('../models/Subscription');
                 const subDocs = [{
@@ -217,10 +209,23 @@ const mpesaCallback = async (req, res) => {
                     endDate: sponsorRequest.endDate || new Date(Date.now() + 27 * 24 * 60 * 60 * 1000),
                     totalPaidKES: amountPaid
                 }];
+                const createdSubs = session
+                    ? await Subscription.create(subDocs, { session })
+                    : await Subscription.create(subDocs);
+                const activeSubscription = createdSubs[0];
+
+                // Update Deliveries status to pending and link subscription
+                const Delivery = require('../models/Delivery');
                 if (session) {
-                    await Subscription.create(subDocs, { session });
+                    await Delivery.updateMany(
+                        { _id: { $in: sponsorRequest.deliveryIds } },
+                        { $set: { status: 'pending', subscription: activeSubscription._id } }
+                    ).session(session);
                 } else {
-                    await Subscription.create(subDocs);
+                    await Delivery.updateMany(
+                        { _id: { $in: sponsorRequest.deliveryIds } },
+                        { $set: { status: 'pending', subscription: activeSubscription._id } }
+                    );
                 }
 
                 // Set student profile subscription active
