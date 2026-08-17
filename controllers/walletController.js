@@ -62,33 +62,11 @@ const getTransactions = async (req, res) => {
   }
 };
 
-// @desc    Mock fund a wallet (Demo/Prototype only)
+// @desc    Mock fund a wallet (Disabled in Production)
 // @route   POST /api/wallet/mock-fund
-// @access  Private
+// @access  Private (Admin Only)
 const mockFund = async (req, res) => {
-  try {
-    const { amountKes } = req.body;
-    
-    if (!amountKes || amountKes <= 0) {
-      return res.status(400).json({ message: "Please provide a valid KES amount to fund." });
-    }
-
-    const result = await walletService.creditWallet(
-      req.user.id,
-      amountKes,
-      'deposit',
-      'wallet',
-      `Mock top-up of ${amountKes} KES`
-    );
-
-    res.json({
-      message: `Successfully added ${amountKes} KES mock balance!`,
-      newBalance: result.wallet.availableBalanceKES
-    });
-  } catch (error) {
-    console.error("Mock fund error:", error);
-    res.status(500).json({ message: 'Server error during mock funding: ' + error.message });
-  }
+  return res.status(403).json({ message: "Mock funding is disabled in production. Please use M-Pesa deposit." });
 };
 
 module.exports = {

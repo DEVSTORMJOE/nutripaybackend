@@ -442,19 +442,7 @@ const quickPayMpesa = async (req, res) => {
       res.json({ message: "STK Push sent successfully to your phone. Waiting for PIN...", checkoutRequestID });
     } catch (err) {
       console.error("STK Push failed:", err.message);
-      const isProduction = process.env.DARAJA_ENV === 'production' || (process.env.NODE_ENV === 'production' && process.env.DARAJA_ENV !== 'sandbox');
-      if (isProduction) {
-        return res.status(500).json({ message: 'M-Pesa STK Push failed: ' + (err.response?.data?.errorMessage || err.message) });
-      }
-
-      console.warn("STK Push failed, falling back to mock deposit in demo sandbox mode:", err.message);
-      const mockID = `ws_CO_Mock_${crypto.randomBytes(8).toString('hex')}`;
-      request.checkoutRequestID = mockID;
-      await request.save();
-      res.json({
-        message: "STK Push mock sent successfully! (Demo Sandbox Mode)",
-        checkoutRequestID: mockID
-      });
+      return res.status(500).json({ message: 'M-Pesa STK Push failed: ' + (err.response?.data?.errorMessage || err.message) });
     }
   } catch (e) {
     console.error(e);
@@ -468,93 +456,6 @@ const checkSponsorMpesaStatus = async (req, res) => {
     const request = await SponsorRequest.findOne({ checkoutRequestID });
     if (!request) {
       return res.status(404).json({ message: "Sponsorship request not found" });
-    }
-
-    const isProduction = process.env.DARAJA_ENV === 'production' || (process.env.NODE_ENV === 'production' && process.env.DARAJA_ENV !== 'sandbox');
-
-    // Auto-approve mock deposits in sandbox/demo environment immediately upon polling
-    if (!isProduction && request.status === 'pending' && checkoutRequestID.startsWith('ws_CO_Mock_')) {
-      console.log(`[Mock Sponsor Deposit] Auto-approving mock deposit of ${request.amountKES} KES`);
-      const mockReceipt = "MOCK_DEP_" + Math.random().toString(36).substring(4).toUpperCase();
-      
-      let sponsor = await User.findOne({ email: request.sponsorEmail });
-      if (!sponsor) {
-        const crypto = require('crypto');
-        const generatedPassword = crypto.randomBytes(8).toString("hex");
-        sponsor = await User.create({
-          name: request.sponsorName,
-          email: request.sponsorEmail,
-          password: generatedPassword,
-          role: 'sponsor',
-          isApproved: true
-        });
-
-        const Sponsor = require('../models/Sponsor');
-        await Sponsor.create({
-          user: sponsor._id,
-          organizationName: request.sponsorName || "Sponsor",
-          contactPhone: ""
-        });
-      }
-
-      // Credit sponsor wallet
-      await walletService.creditWallet(
-        sponsor._id,
-        request.amountKES,
-        'deposit',
-        'mpesa',
-        `M-Pesa Sponsor Payment (Receipt: ${mockReceipt})`
-      );
-
-      // Debit sponsor wallet
-      await walletService.debitWallet(
-        sponsor._id,
-        request.amountKES,
-        'funding',
-        'wallet',
-        `Subscription quick sponsor funding for student: ${request.student}`
-      );
-
-      // Credit student wallet
-      const creditRes = await walletService.creditWallet(
-        request.student,
-        request.amountKES,
-        'funding',
-        'wallet',
-        `Sponsor request funding from sponsor: ${sponsor._id}`
-      );
-      creditRes.transaction.paymentSource = 'sponsor_funds';
-      await creditRes.transaction.save();
-
-      // Immediately lock subscription funds
-      const lockResult = await escrowService.lockSubscriptionFunds(request.student, request.amountKES, sponsor._id);
-
-      // Update Deliveries status to pending
-      await Delivery.updateMany({ _id: { $in: request.deliveryIds } }, { $set: { status: 'pending' } });
-
-      // Create active subscription
-      const Subscription = require('../models/Subscription');
-      await Subscription.create({
-        student: request.student,
-        planId: request.planId || 'essential',
-        sponsor: sponsor._id,
-        status: 'active',
-        startDate: request.startDate || new Date(),
-        endDate: request.endDate || new Date(Date.now() + 27 * 24 * 60 * 60 * 1000),
-        totalPaidKES: request.amountKES
-      });
-
-      // Set student profile subscription active
-      const Student = require('../models/Student');
-      const studentProfile = await Student.findOne({ user: request.student });
-      if (studentProfile) {
-        studentProfile.subscriptionActive = true;
-        await studentProfile.save();
-      }
-
-      // Mark request as paid
-      request.status = 'paid';
-      await request.save();
     }
 
     res.json({ status: request.status, amount: request.amountKES });

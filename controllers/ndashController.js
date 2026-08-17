@@ -94,27 +94,25 @@ const placeOrder = async (req, res) => {
     });
 
     // Trigger STK Push
-    let mpesaData;
     try {
-      mpesaData = await ndashPaymentService.initiateSTKPush(studentId, phone, grandTotal);
+      const mpesaData = await ndashPaymentService.initiateSTKPush(studentId, phone, grandTotal);
       order.checkoutRequestID = mpesaData.CheckoutRequestID;
       await order.save();
-    } catch (stkErr) {
-      console.warn('[N-Dash STK Push fallback to mock checkout]', stkErr.message);
-      const mockID = `ws_ND_Mock_${crypto.randomBytes(8).toString('hex')}`;
-      order.checkoutRequestID = mockID;
-      await order.save();
-      mpesaData = { CheckoutRequestID: mockID, mock: true };
-    }
 
-    res.status(201).json({
-      message: mpesaData.mock 
-        ? 'STK Push mock initiated successfully! (Demo Sandbox Mode)' 
-        : 'STK Push sent successfully to your phone. Waiting for PIN...',
-      orderId: order.orderId,
-      checkoutRequestID: order.checkoutRequestID,
-      grandTotal
-    });
+      return res.status(201).json({
+        message: 'STK Push sent successfully to your phone. Waiting for PIN...',
+        orderId: order.orderId,
+        checkoutRequestID: order.checkoutRequestID,
+        grandTotal
+      });
+    } catch (stkErr) {
+      console.error('[N-Dash STK Push failed]', stkErr.message);
+      order.status = 'failed';
+      await order.save();
+      return res.status(400).json({
+        message: `M-Pesa STK Push failed: ${stkErr.response?.data?.error_message || stkErr.message || 'Payment initiation failed'}. Please try again.`
+      });
+    }
   } catch (error) {
     console.error('N-Dash placeOrder error:', error);
     res.status(500).json({ message: 'Failed to place order: ' + error.message });
@@ -135,23 +133,6 @@ const checkPaymentStatus = async (req, res) => {
 
     if (!order) {
       return res.status(404).json({ message: 'N-Dash order payment details not found' });
-    }
-
-    // Auto-approve mock payments in sandbox
-    if (order.status === 'pending_payment' && checkoutRequestID.startsWith('ws_ND_Mock_')) {
-      console.log(`[N-Dash Mock Payment] Auto-approving mock payment for Order #${order.orderId}`);
-      const mockReceipt = "MOCK_ND_" + Math.random().toString(36).substring(4).toUpperCase();
-      
-      await ndashPaymentService.processPaymentSuccess(
-        checkoutRequestID, 
-        mockReceipt, 
-        order.grandTotal, 
-        req.user.phone || '254700000000'
-      );
-      
-      // reload
-      const updatedOrder = await NDashOrder.findById(order._id);
-      return res.json({ status: updatedOrder.status, receipt: updatedOrder.mpesaReceiptNumber });
     }
 
     res.json({ status: order.status, receipt: order.mpesaReceiptNumber });

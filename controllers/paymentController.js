@@ -248,19 +248,12 @@ const createCustomOrder = async (req, res) => {
         });
       } catch (err) {
         console.error("Direct Safaricom STK Push error:", err.message);
+        customOrder.status = 'failed';
+        await customOrder.save();
+        return res.status(400).json({
+          message: `M-Pesa STK Push failed: ${err.response?.data?.errorMessage || err.message || 'Payment initiation failed'}. Please try again.`
+        });
       }
-
-      // Mock checkoutRequestID for demo/prototype mode if Safaricom API is unavailable
-      const mockID = `ws_CO_Mock_${crypto.randomBytes(8).toString('hex')}`;
-      customOrder.checkoutRequestID = mockID;
-      await customOrder.save();
-
-      return res.json({
-        success: true,
-        message: "STK Push mock sent successfully! (Demo Sandbox Mode)",
-        reference: mockID,
-        orderId
-      });
     }
 
   } catch (error) {
@@ -278,25 +271,6 @@ const checkCustomOrderStatus = async (req, res) => {
     const order = await CustomOrder.findOne({ checkoutRequestID: reference });
     if (!order) {
       return res.status(404).json({ message: "Custom order not found." });
-    }
-
-    // Auto-approve mock sandbox checkouts immediately upon polling
-    if (reference.startsWith("ws_CO_Mock_") && order.status === "pending_payment") {
-      console.log(`[Mock STK Push] Auto-approving mock custom order: ${order.orderId}`);
-      await walletService.processMpesaDirectCustomOrder(
-        reference,
-        order.totalCost,
-        "MOCK_STK_" + Math.random().toString(36).substring(4).toUpperCase(),
-        "254700000000"
-      );
-      
-      const updated = await CustomOrder.findById(order._id);
-      return res.json({
-        orderId: updated.orderId,
-        status: updated.status,
-        totalCost: updated.totalCost,
-        paymentMethod: updated.paymentMethod
-      });
     }
 
     res.json({

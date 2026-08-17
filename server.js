@@ -93,6 +93,12 @@ const allowedOrigins = [
   process.env.CLIENT_URL,
   process.env.FRONTEND_URL,
 
+  // Production domains
+  "https://nutripay.co.ke",
+  "https://www.nutripay.co.ke",
+  "https://api.nutripay.co.ke",
+  "https://admin.nutripay.co.ke",
+
   // React CRA local frontend
   "http://localhost:3000",
   "http://127.0.0.1:3000",
@@ -109,7 +115,7 @@ const corsOptions = {
       return callback(null, true);
     }
 
-    if (allowedOrigins.includes(origin)) {
+    if (allowedOrigins.includes(origin) || origin.endsWith("nutripay.co.ke")) {
       return callback(null, true);
     }
 

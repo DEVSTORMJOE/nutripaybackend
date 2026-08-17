@@ -101,13 +101,8 @@ async function initiateDeposit(userId, phone, amountKes, orderType = 'monthly_su
         TransactionDesc: desc
     };
 
-    if (token === "mocked_token") {
-        console.log("[M-Pesa STK Mock] Initiating STK Push for user:", userId, "amount:", amountKes);
-        return {
-            CheckoutRequestID: `ws_CO_Mock_${crypto.randomBytes(8).toString('hex')}`,
-            ResponseCode: "0",
-            CustomerMessage: "Success. Request accepted for processing"
-        };
+    if (!token || token === "mocked_token") {
+        throw new Error("Failed to generate Safaricom Auth Token: DARAJA credentials missing or invalid.");
     }
 
     const baseUrl = getBaseUrl();

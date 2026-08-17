@@ -27,17 +27,8 @@ async function initiateDeposit(userId, phone, amountKes, orderType = 'monthly_su
   const reference = `${orderType}_${userId}_${Date.now()}`;
   const amount = Math.round(Number(amountKes));
 
-  // If API credentials are missing or in non-production sandbox mode without keys, use simulated STK push response
   if (!apiKey || !channelId) {
-    console.log(`[PayHero STK Mock] Initiating STK Push for user: ${userId}, phone: ${formattedPhone}, amount: KES ${amount}`);
-    return {
-      success: true,
-      provider: "payhero",
-      CheckoutRequestID: `PH_CO_Mock_${crypto.randomBytes(8).toString('hex')}`,
-      reference,
-      ResponseCode: "0",
-      CustomerMessage: "Success. PayHero STK Push request accepted for processing"
-    };
+    throw new Error("PayHero API credentials (PAYHERO_API_KEY / PAYHERO_CHANNEL_ID) are missing from configuration.");
   }
 
   const authHeader = `Basic ${Buffer.from(`${apiKey}:${apiSecret || ''}`).toString('base64')}`;
@@ -75,18 +66,7 @@ async function initiateDeposit(userId, phone, amountKes, orderType = 'monthly_su
     };
   } catch (err) {
     console.error("PayHero STK Push initiation failed:", err.response?.data || err.message);
-    if (!isProductionEnv()) {
-      console.log("[PayHero STK Fallback Mock] Returning simulated response due to API error in test environment");
-      return {
-        success: true,
-        provider: "payhero",
-        CheckoutRequestID: `PH_CO_Mock_${crypto.randomBytes(8).toString('hex')}`,
-        reference,
-        ResponseCode: "0",
-        CustomerMessage: "Success (Sandbox Mock). PayHero STK Push accepted"
-      };
-    }
-    throw new Error(`PayHero STK Push failed: ${err.response?.data?.message || err.message}`);
+    throw new Error(`PayHero STK Push failed: ${err.response?.data?.message || err.response?.data?.error_message || err.message}`);
   }
 }
 

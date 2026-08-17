@@ -35,25 +35,7 @@ const mpesaDeposit = async (req, res) => {
             res.json({ message: "STK Push sent successfully to your phone. Waiting for PIN...", checkoutRequestID });
         } catch (err) {
             console.error("Direct Safaricom STK Push failed:", err.message);
-            
-            const isProduction = process.env.DARAJA_ENV === 'production' || (process.env.NODE_ENV === 'production' && process.env.DARAJA_ENV !== 'sandbox');
-            if (isProduction) {
-                return res.status(500).json({ message: 'M-Pesa STK Push failed: ' + (err.response?.data?.errorMessage || err.message) });
-            }
-
-            console.warn("Falling back to mock deposit in demo sandbox mode:", err.message);
-            const mockID = `ws_CO_Mock_${crypto.randomBytes(8).toString('hex')}`;
-            await MpesaDeposit.create({
-                user: req.user.id,
-                amount: amountKes,
-                phone: phone,
-                checkoutRequestID: mockID,
-                status: 'pending'
-            });
-            res.json({
-                message: "STK Push mock sent successfully! (Demo Sandbox Mode)",
-                checkoutRequestID: mockID
-            });
+            return res.status(500).json({ message: 'M-Pesa STK Push failed: ' + (err.response?.data?.errorMessage || err.message) });
         }
     } catch (error) {
         console.error("M-Pesa STK Push error:", error.message);
@@ -510,38 +492,6 @@ const checkMpesaStatus = async (req, res) => {
         
         if (!deposit) {
             return res.status(404).json({ message: "M-Pesa transaction not found" });
-        }
-
-        // Auto-approve mock deposits in sandbox/demo environment immediately upon polling
-        const isProduction = process.env.DARAJA_ENV === 'production' || (process.env.NODE_ENV === 'production' && process.env.DARAJA_ENV !== 'sandbox');
-        if (!isProduction && deposit.status === 'pending' && checkoutRequestID.startsWith('ws_CO_Mock_')) {
-            console.log(`[Mock Deposit] Auto-approving mock deposit of ${deposit.amount} KES`);
-            const mockReceipt = "MOCK_DEP_" + Math.random().toString(36).substring(4).toUpperCase();
-            
-            await walletService.creditWallet(
-                req.user.id,
-                deposit.amount,
-                'deposit',
-                'mpesa',
-                `M-Pesa Deposit (Receipt: ${mockReceipt})`
-            );
-            
-            deposit.status = 'completed';
-            deposit.receiptNumber = mockReceipt;
-            await deposit.save();
-
-            // In-app notification for mock deposit
-            try {
-                const Notification = require('../models/Notification');
-                await Notification.create({
-                    user: req.user.id,
-                    type: 'wallet',
-                    title: 'Wallet Funded via M-Pesa',
-                    message: `Your wallet has been credited with ${deposit.amount} KES. Funds are now available in your wallet!`
-                });
-            } catch (e) {
-                console.warn('[checkMpesaStatus] In-app notification error:', e.message);
-            }
         }
 
         res.json({ status: deposit.status, amount: deposit.amount, receipt: deposit.receiptNumber });
