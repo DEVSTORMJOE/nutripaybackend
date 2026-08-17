@@ -9,6 +9,7 @@ const {
   adminUpdateAmbassador,
   adminGetReferralLogs,
   adminToggleModule,
+  adminToggleWelcomeSms,
 } = require("../controllers/ambassadorController");
 const { protect } = require("../middleware/authMiddleware");
 const { role } = require("../middleware/roleMiddleware");
@@ -24,5 +25,6 @@ router.post("/admin/create", protect, role("admin"), adminCreateAmbassador);
 router.patch("/admin/:id", protect, role("admin"), adminUpdateAmbassador);
 router.get("/admin/logs", protect, role("admin"), adminGetReferralLogs);
 router.post("/admin/toggle-module", protect, role("admin"), adminToggleModule);
+router.post("/admin/toggle-welcome-sms", protect, role("admin"), adminToggleWelcomeSms);
 
 module.exports = router;

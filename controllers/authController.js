@@ -8,7 +8,8 @@ const Sponsor = require("../models/Sponsor");
 const DeliveryPersonnel = require("../models/DeliveryPersonnel");
 const admin = require("../config/firebaseAdmin");
 const { normalizePhone, isValidPhone } = require("../utils/phoneUtils");
-const { sendWelcomeEmail } = require("../utils/mailer");
+const sendSms = require("../utils/sendSms");
+const SystemSettings = require("../models/SystemSettings");
 
 const jwtKeys = require("../config/jwtKeys");
 const RefreshToken = require("../models/RefreshToken");
@@ -415,12 +416,26 @@ async function register(req, res) {
 
     const safeUser = await User.findById(user._id).select("-password");
 
-    // Asynchronously send welcome email with referral verification code
-    sendWelcomeEmail({
-      to: safeUser.email,
-      name: safeUser.name,
-      referralCode: safeUser.referralCode,
-    }).catch((err) => console.error("[AUTH] Welcome email error:", err.message));
+    // Asynchronously send welcome SMS with referral verification code if enabled
+    (async () => {
+      try {
+        const isSmsEnabled = await SystemSettings.getSetting("welcome_sms_enabled", true);
+        const isAmbassadorEnabled = await SystemSettings.getSetting("ambassador_module_enabled", true);
+        if (!isSmsEnabled || !isAmbassadorEnabled) {
+          console.log("[AUTH] Welcome SMS is globally disabled, skipping dispatch.");
+          return;
+        }
+        if (!safeUser.phone) {
+          console.warn("[AUTH] Welcome SMS skipped: user has no phone number.");
+          return;
+        }
+        const smsMessage = `Welcome to NutriPay, ${safeUser.name}! Your referral code is ${safeUser.referralCode}. Share this with a Campus Ambassador to verify your signup.`;
+        await sendSms(safeUser.phone, smsMessage);
+        console.log(`[AUTH] Welcome SMS dispatched to ${safeUser.phone}`);
+      } catch (err) {
+        console.error("[AUTH] Welcome SMS error:", err.message);
+      }
+    })();
 
     if (reviewOnly) {
       return res.status(201).json({

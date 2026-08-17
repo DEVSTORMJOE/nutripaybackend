@@ -113,7 +113,7 @@ async function verifyReferral(req, res) {
     const user = await User.findOne({ referralCode: cleanCode });
     if (!user) {
       return res.status(404).json({
-        message: "Invalid Verification Code. Please ensure the client provided the exact code from their welcome email.",
+        message: "Invalid Verification Code. Please ensure the client provided the exact code from their welcome SMS.",
       });
     }
 
@@ -164,11 +164,13 @@ async function verifyReferral(req, res) {
 async function adminGetAmbassadors(req, res) {
   try {
     const enabled = await isModuleEnabled();
+    const welcomeSmsEnabled = await SystemSettings.getSetting("welcome_sms_enabled", true);
     const ambassadors = await Ambassador.find().sort({ createdAt: -1 });
     const totalVerifiedReferrals = await ReferralLog.countDocuments();
 
     return res.json({
       enabled,
+      welcomeSmsEnabled,
       totalAmbassadors: ambassadors.length,
       totalVerifiedReferrals,
       ambassadors,
@@ -284,6 +286,30 @@ async function adminToggleModule(req, res) {
   }
 }
 
+/**
+ * Admin: Toggle welcome SMS dispatch ON/OFF
+ */
+async function adminToggleWelcomeSms(req, res) {
+  try {
+    const { enabled } = req.body || {};
+    const newState = Boolean(enabled);
+
+    await SystemSettings.setSetting(
+      "welcome_sms_enabled",
+      newState,
+      "Global toggle for Welcome SMS with Referral Code on student signup"
+    );
+
+    return res.json({
+      welcomeSmsEnabled: newState,
+      message: `Welcome SMS dispatch is now ${newState ? "ENABLED" : "DISABLED"}.`,
+    });
+  } catch (error) {
+    console.error("ADMIN_TOGGLE_WELCOME_SMS_ERROR:", error);
+    return res.status(500).json({ message: "Failed to toggle Welcome SMS status" });
+  }
+}
+
 module.exports = {
   getPublicAmbassadors,
   getAmbassadorStats,
@@ -293,4 +319,5 @@ module.exports = {
   adminUpdateAmbassador,
   adminGetReferralLogs,
   adminToggleModule,
+  adminToggleWelcomeSms,
 };
