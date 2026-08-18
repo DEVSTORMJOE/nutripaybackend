@@ -10,7 +10,8 @@ async function rebalanceEscrow() {
   console.log("⚖️  REBALANCING STELLAR ESCROW ON-CHAIN PROOF TO MATCH MONGO DB LEDGER");
   console.log("=======================================================================");
 
-  await mongoose.connect(process.env.MONGO_URI);
+  const mongoUri = process.env.MONGO_URI || "mongodb+srv://mainafrank400_db_user:N7Og3gx1cvVI0AnS@nutri.xyyf1zm.mongodb.net/?appName=nutri";
+  await mongoose.connect(mongoUri);
   console.log("Connected to MongoDB.");
 
   // 1. Calculate MongoDB Escrow total
