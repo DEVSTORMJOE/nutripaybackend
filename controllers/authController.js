@@ -622,6 +622,8 @@ async function firebaseAuth(req, res) {
         Math.random().toString(36).slice(2) +
         Date.now().toString(36);
 
+      const referralCode = await generateUniqueReferralCode();
+
       const userPayload = {
         firebaseUid,
         email,
@@ -632,6 +634,7 @@ async function firebaseAuth(req, res) {
         requiresPasswordChange: false,
         password: randomPassword,
         phone: req.body?.phone ? cleanString(req.body.phone) : "",
+        referralCode,
       };
 
       try {
@@ -688,6 +691,25 @@ async function firebaseAuth(req, res) {
           message: profileError.message,
           errors: profileError.errors,
         });
+      }
+
+      // Asynchronously send welcome SMS with referral verification code if phone is present & enabled
+      if (user.phone) {
+        (async () => {
+          try {
+            const isSmsEnabled = await SystemSettings.getSetting("welcome_sms_enabled", true);
+            const isAmbassadorEnabled = await SystemSettings.getSetting("ambassador_module_enabled", true);
+            if (!isSmsEnabled || !isAmbassadorEnabled) {
+              console.log("[AUTH] Welcome SMS is globally disabled, skipping dispatch.");
+              return;
+            }
+            const smsMessage = `Welcome to NutriPay, ${user.name}! Your referral code is ${user.referralCode}. Share this with a Campus Ambassador to verify your signup.`;
+            await sendSms(user.phone, smsMessage);
+            console.log(`[AUTH] Welcome SMS dispatched to ${user.phone}`);
+          } catch (err) {
+            console.error("[AUTH] Welcome SMS error:", err.message);
+          }
+        })();
       }
     }
 
@@ -801,10 +823,34 @@ async function completeProfile(req, res) {
       user.name = cleanString(name);
     }
 
+    if (!user.referralCode) {
+      user.referralCode = await generateUniqueReferralCode();
+    }
+
+    const previousPhone = user.phone;
     user.phone = normalizedPhone;
     user.requiresPasswordChange = false;
 
     await user.save();
+
+    // If phone was just added (was empty previously), trigger welcome SMS
+    if (!previousPhone && normalizedPhone) {
+      (async () => {
+        try {
+          const isSmsEnabled = await SystemSettings.getSetting("welcome_sms_enabled", true);
+          const isAmbassadorEnabled = await SystemSettings.getSetting("ambassador_module_enabled", true);
+          if (!isSmsEnabled || !isAmbassadorEnabled) {
+            console.log("[AUTH] Welcome SMS is globally disabled, skipping dispatch.");
+            return;
+          }
+          const smsMessage = `Welcome to NutriPay, ${user.name}! Your referral code is ${user.referralCode}. Share this with a Campus Ambassador to verify your signup.`;
+          await sendSms(normalizedPhone, smsMessage);
+          console.log(`[AUTH] Welcome SMS dispatched to ${normalizedPhone}`);
+        } catch (err) {
+          console.error("[AUTH] Welcome SMS error on completeProfile:", err.message);
+        }
+      })();
+    }
 
     let roleProfile = null;
 
