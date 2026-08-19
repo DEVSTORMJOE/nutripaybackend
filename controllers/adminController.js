@@ -144,9 +144,9 @@ const getUsers = async (req, res) => {
     const users = await User.find().select('-password').lean();
     
     const Student = require('../models/Student');
-    const students = await Student.find().select('user studentId').lean();
+    const students = await Student.find().select('user studentId hostel block floor room landmark university campus').lean();
     const studentMap = students.reduce((acc, s) => {
-      acc[s.user.toString()] = s.studentId;
+      acc[s.user.toString()] = s;
       return acc;
     }, {});
 
@@ -184,9 +184,27 @@ const getUsers = async (req, res) => {
         approvedStatus = deliveryMap[u._id.toString()] || 'pending';
       }
 
+      const sData = studentMap[u._id.toString()];
+
       return {
         ...u,
-        studentId: studentMap[u._id.toString()] || null,
+        studentId: sData ? sData.studentId : null,
+        hostel: sData?.hostel || '',
+        block: sData?.block || '',
+        floor: sData?.floor || '',
+        room: sData?.room || '',
+        landmark: sData?.landmark || '',
+        university: sData?.university || '',
+        campus: sData?.campus || '',
+        residenceDetails: sData ? {
+          hostel: sData.hostel || '',
+          block: sData.block || '',
+          floor: sData.floor || '',
+          room: sData.room || '',
+          landmark: sData.landmark || '',
+          university: sData.university || '',
+          campus: sData.campus || ''
+        } : null,
         vendorId: driverVendorMap[u._id.toString()] || null,
         approvedStatus
       };
