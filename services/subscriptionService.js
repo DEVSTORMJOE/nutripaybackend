@@ -221,6 +221,28 @@ const createCustomPlanSubscription = async ({
     }
   }
 
+  // Notify Student and Admin via SMS
+  try {
+    const User = require('../models/User');
+    const studentUser = session
+      ? await User.findById(userId).session(session)
+      : await User.findById(userId);
+
+    if (studentUser) {
+      const { notifyOrderPlacement } = require('../utils/orderSmsNotifier');
+      notifyOrderPlacement({
+        orderType: 'Custom Plan Subscription',
+        orderId: subscription._id.toString().slice(-8).toUpperCase(),
+        studentName: studentUser.name,
+        studentPhone: studentUser.phone,
+        itemsSummary: `${daysCount} Days Custom Meal Plan`,
+        amountKES: totalCost
+      });
+    }
+  } catch (smsErr) {
+    console.warn("[Subscription Service] SMS notification error (ignored):", smsErr.message);
+  }
+
   return subscription;
 };
 

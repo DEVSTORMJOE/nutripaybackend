@@ -201,6 +201,22 @@ const createCustomOrder = async (req, res) => {
         message: `You have a new custom order (${orderId}) of KES ${mealPrice}.`
       });
 
+      // Dispatch SMS to Student and Admin
+      try {
+        const { notifyOrderPlacement } = require('../utils/orderSmsNotifier');
+        const itemsSummary = (items || []).map(i => `${i.name || 'Meal'} x${i.quantity || 1}`).join(', ');
+        notifyOrderPlacement({
+          orderType: 'Instant / Quick Order',
+          orderId,
+          studentName: user.name,
+          studentPhone: user.phone,
+          itemsSummary: itemsSummary || 'Quick Order Meal',
+          amountKES: totalCost
+        });
+      } catch (smsErr) {
+        console.warn("[PaymentController] Order SMS error (ignored):", smsErr.message);
+      }
+
       return res.json({
         success: true,
         message: "Custom order placed successfully using wallet balance!",

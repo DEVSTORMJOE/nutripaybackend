@@ -215,9 +215,8 @@ const updateOrderStatus = async (req, res) => {
     if (status === 'ready') {
       if (!delivery.deliveryVerificationCode) {
         const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-        const part1 = Array.from({ length: 4 }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
-        const part2 = Array.from({ length: 3 }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
-        delivery.deliveryVerificationCode = `NP-${part1}-${part2}`;
+        const code6 = Array.from({ length: 6 }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
+        delivery.deliveryVerificationCode = `NP-${code6}`;
         
         const expiry = new Date();
         expiry.setHours(23, 59, 59, 999);

@@ -308,10 +308,15 @@ const markDelivered = async (req, res) => {
       return res.status(400).json({ message: "No delivery verification code exists for this order." });
     }
 
-    const providedCode = String(code || "").trim().toUpperCase();
-    const actualCode = String(delivery.deliveryVerificationCode).trim().toUpperCase();
+    let providedCode = String(code || "").trim().toUpperCase();
+    if (!providedCode.startsWith("NP-")) {
+      providedCode = "NP-" + providedCode;
+    }
 
-    if (providedCode !== actualCode) {
+    const cleanProvided = providedCode.replace(/[^A-Z0-9]/g, "");
+    const cleanActual = String(delivery.deliveryVerificationCode).trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
+
+    if (cleanProvided !== cleanActual) {
       return res.status(400).json({ message: "Invalid delivery verification code. Access Denied." });
     }
 

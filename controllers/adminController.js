@@ -1094,7 +1094,8 @@ const getSettings = async (req, res) => {
       banner_timer: await getSettingVal('banner_timer', 5),
       banner_visible: await getSettingVal('banner_visible', false),
       banner_content: await getSettingVal('banner_content', '<h1>Welcome to NutriPay!</h1><p>Special banner description here.</p>'),
-      active_payment_gateway: await getSettingVal('active_payment_gateway', 'mpesa')
+      active_payment_gateway: await getSettingVal('active_payment_gateway', 'mpesa'),
+      order_sms_notification_phone: await getSettingVal('order_sms_notification_phone', '')
     });
   } catch (e) {
     console.error(e);
@@ -1116,7 +1117,8 @@ const updateSettings = async (req, res) => {
     banner_timer,
     banner_visible,
     banner_content,
-    active_payment_gateway
+    active_payment_gateway,
+    order_sms_notification_phone
   } = req.body;
   try {
     const SystemSettings = require('../models/SystemSettings');
@@ -1139,8 +1141,7 @@ const updateSettings = async (req, res) => {
     await updateKey('banner_visible', banner_visible !== undefined ? Boolean(banner_visible) : undefined);
     await updateKey('banner_content', banner_content);
     await updateKey('active_payment_gateway', active_payment_gateway ? String(active_payment_gateway).toLowerCase() : undefined);
-    await updateKey('banner_visible', banner_visible);
-    await updateKey('banner_content', banner_content);
+    await updateKey('order_sms_notification_phone', order_sms_notification_phone !== undefined ? String(order_sms_notification_phone).trim() : undefined);
 
     res.json({ message: "System settings updated successfully!" });
   } catch (e) {
