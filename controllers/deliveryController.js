@@ -371,7 +371,6 @@ const markDelivered = async (req, res) => {
     // ✅ SMS on successful delivery (only on transition to delivered)
     if (!wasAlreadyDelivered && typeof sendText === "function") {
       const studentPhone = safeStr(delivery?.student?.phone);
-      const vendorPhone = safeStr(delivery?.vendor?.user?.phone);
 
       const dateLabel = delivery?.scheduledDate
         ? new Date(delivery.scheduledDate).toLocaleDateString(undefined, {
@@ -401,21 +400,7 @@ const markDelivered = async (req, res) => {
         }
       }
 
-      // Vendor SMS (optional)
-      if (vendorPhone) {
-        const studentName = safeStr(delivery?.student?.name) || "Student";
-        const msgVendor =
-          `NutriPay: Delivery completed\n` +
-          `Student: ${studentName}\n` +
-          `Meal: ${dateLabel}${timeSlot ? " • " + timeSlot : ""}\n` +
-          `Amount: ${amount}`;
-
-        try {
-          await sendText(vendorPhone, msgVendor);
-        } catch (e) {
-          console.warn("Vendor SMS error (ignored):", e.message);
-        }
-      }
+      // Vendor SMS removed per request
     }
 
     res.json({ message: "Delivery marked as complete" });
