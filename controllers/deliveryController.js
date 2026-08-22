@@ -324,86 +324,82 @@ const markDelivered = async (req, res) => {
       return res.status(400).json({ message: "Delivery verification code has expired." });
     }
 
-    // Link the completing driver
+    // Link the completing driver and mark delivered instantly
     delivery.deliveryAgent = req.user.id;
-
-    const wasAlreadyDelivered = false;
-
-    // ===== New hybrid custodial payout logic =====
-    if (!wasAlreadyDelivered) {
-      try {
-        await escrowService.releaseDailyVendorPayment(deliveryId);
-      } catch (payoutError) {
-        console.error("Payout failed during delivery completion:", payoutError);
-        return res.status(500).json({
-          message:
-            "Delivery marked but payout failed: " +
-            (payoutError.message || "Unknown error"),
-        });
-      }
-    }
-
     delivery.status = "delivered";
     delivery.deliveredAt = Date.now();
     await delivery.save();
 
-    // ===== Auto-complete active subscription if all deliveries are fulfilled =====
-    const studentId = delivery.student?._id || delivery.student;
-    if (studentId) {
-      const subscriptionService = require("../services/subscriptionService");
-      await subscriptionService.checkAndAutoCompleteSubscriptions(studentId);
-    }
+    // Send INSTANT success response to driver (< 100ms)
+    res.json({ message: "Delivery marked as complete", status: delivery.status });
 
-    // ===== Existing notification logic (unchanged) =====
-    const Notification = require("../models/Notification");
-    if (delivery.vendor && delivery.vendor.user) {
-      const vendorUserId =
-        delivery?.vendor?.user?._id || delivery?.vendor?.user;
-
-      await Notification.create({
-        user: vendorUserId,
-        type: "alert",
-        title: "Delivery Completed",
-        message: `Driver ${req.user.name || "someone"} finalized a delivery. Escrow payouts triggered.`,
-      });
-    }
-
-    // ✅ SMS on successful delivery (only on transition to delivered)
-    if (!wasAlreadyDelivered && typeof sendText === "function") {
-      const studentPhone = safeStr(delivery?.student?.phone);
-
-      const dateLabel = delivery?.scheduledDate
-        ? new Date(delivery.scheduledDate).toLocaleDateString(undefined, {
-            weekday: "short",
-            month: "short",
-            day: "numeric",
-          })
-        : "";
-
-      const timeSlot = safeStr(delivery?.timeSlot || "");
-      const amount = fmtMoneyKes(delivery?.totalCost);
-      const driverName = safeStr(req.user?.name || "Driver");
-
-      // Student SMS
-      if (studentPhone) {
-        const orderIdStr = delivery?.orderId || (delivery?._id ? delivery._id.toString().slice(-8).toUpperCase() : '');
-        const msgStudent =
-          `NutriPay: Your order ${orderIdStr ? '#' + orderIdStr + ' ' : ''}is delivered.\n` +
-          `Meal: ${dateLabel}${timeSlot ? " • " + timeSlot : ""}\n` +
-          `Amount: ${amount}\n` +
-          `Delivered by: ${driverName}`;
-
-        try {
-          await sendText(studentPhone, msgStudent);
-        } catch (e) {
-          console.warn("Student SMS error (ignored):", e.message);
-        }
+    // Execute Escrow Payout, Subscriptions, Notifications & SMS asynchronously in background
+    setImmediate(async () => {
+      // 1. Escrow Vendor Payout
+      try {
+        await escrowService.releaseDailyVendorPayment(deliveryId);
+      } catch (payoutError) {
+        console.error("[Background Payout Error] Delivery ID:", deliveryId, payoutError.message || payoutError);
       }
 
-      // Vendor SMS removed per request
-    }
+      // 2. Auto-complete active subscription if all deliveries are fulfilled
+      try {
+        const studentId = delivery.student?._id || delivery.student;
+        if (studentId) {
+          const subscriptionService = require("../services/subscriptionService");
+          await subscriptionService.checkAndAutoCompleteSubscriptions(studentId);
+        }
+      } catch (subErr) {
+        console.error("[Background Subscription Check Error]:", subErr.message || subErr);
+      }
 
-    res.json({ message: "Delivery marked as complete" });
+      // 3. Notifications to Vendor
+      try {
+        const Notification = require("../models/Notification");
+        if (delivery.vendor && delivery.vendor.user) {
+          const vendorUserId = delivery?.vendor?.user?._id || delivery?.vendor?.user;
+          await Notification.create({
+            user: vendorUserId,
+            type: "alert",
+            title: "Delivery Completed",
+            message: `Driver ${req.user.name || "someone"} finalized a delivery. Escrow payouts triggered.`,
+          });
+        }
+      } catch (notifErr) {
+        console.error("[Background Notification Error]:", notifErr.message || notifErr);
+      }
+
+      // 4. SMS Notification to Student
+      if (typeof sendText === "function") {
+        const studentPhone = safeStr(delivery?.student?.phone);
+        const dateLabel = delivery?.scheduledDate
+          ? new Date(delivery.scheduledDate).toLocaleDateString(undefined, {
+              weekday: "short",
+              month: "short",
+              day: "numeric",
+            })
+          : "";
+
+        const timeSlot = safeStr(delivery?.timeSlot || "");
+        const amount = fmtMoneyKes(delivery?.totalCost);
+        const driverName = safeStr(req.user?.name || "Driver");
+
+        if (studentPhone) {
+          const orderIdStr = delivery?.orderId || (delivery?._id ? delivery._id.toString().slice(-8).toUpperCase() : '');
+          const msgStudent =
+            `NutriPay: Your order ${orderIdStr ? '#' + orderIdStr + ' ' : ''}is delivered.\n` +
+            `Meal: ${dateLabel}${timeSlot ? " • " + timeSlot : ""}\n` +
+            `Amount: ${amount}\n` +
+            `Delivered by: ${driverName}`;
+
+          try {
+            await sendText(studentPhone, msgStudent);
+          } catch (e) {
+            console.warn("[Background Student SMS Warning]:", e.message);
+          }
+        }
+      }
+    });
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: "Server Error" });

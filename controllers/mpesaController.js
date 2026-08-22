@@ -572,6 +572,14 @@ const mpesaCallback = async (req, res) => {
                         title: 'Wallet Funded via M-Pesa',
                         message: `Your wallet has been credited with ${amount} KES via M-Pesa (Receipt: ${mpesaReceiptNumber}). You can now use these funds.`
                     });
+
+                    // Send Client SMS Notification
+                    const User = require('../models/User');
+                    const notifyUserDoc = await User.findById(notifyUserId);
+                    if (notifyUserDoc && notifyUserDoc.phone) {
+                        const { sendText } = require('../services/sms');
+                        sendText(notifyUserDoc.phone, `NutriPay: Payment of KES ${amount} confirmed (Receipt: ${mpesaReceiptNumber}). Your order/wallet has been processed!`).catch(e => console.warn('[SMS Client Notification Warning]:', e.message));
+                    }
                 } catch (notiErr) {
                     console.warn('[mpesaCallback] In-app notification failed:', notiErr.message);
                 }

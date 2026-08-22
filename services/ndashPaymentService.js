@@ -57,6 +57,17 @@ async function processPaymentSuccess(checkoutRequestID, receipt, amount, phone) 
     status: 'completed',
     description: `N-Dash Payment for Order #${order.orderId}`
   });
+
+  // 4b. Send SMS to student confirming order payment & processing
+  try {
+    const { sendText } = require('./sms');
+    const studentPhone = order.student?.phone || phone;
+    if (studentPhone) {
+      await sendText(studentPhone, `NutriPay: Your N-Dash order #${order.orderId} payment of KES ${order.grandTotal} is confirmed! Your order is now being processed.`);
+    }
+  } catch (studentSmsErr) {
+    console.warn(`[ndashPaymentService] Student SMS notification failed for Order #${order.orderId}:`, studentSmsErr.message);
+  }
   
   // 5. Driver Notification & Manual Payout Tracking
   if (order.deliveryAgent) {

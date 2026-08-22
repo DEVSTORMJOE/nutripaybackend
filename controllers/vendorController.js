@@ -214,12 +214,11 @@ const updateOrderStatus = async (req, res) => {
 
     if (status === 'ready') {
       if (!delivery.deliveryVerificationCode) {
-        const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-        const code6 = Array.from({ length: 6 }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
+        const digits = '0123456789';
+        const code6 = Array.from({ length: 6 }, () => digits[Math.floor(Math.random() * digits.length)]).join('');
         delivery.deliveryVerificationCode = `NP-${code6}`;
         
-        const expiry = new Date();
-        expiry.setHours(23, 59, 59, 999);
+        const expiry = new Date(Date.now() + 48 * 60 * 60 * 1000); // 48 hours validity window
         delivery.deliveryVerificationExpiry = expiry;
       }
 

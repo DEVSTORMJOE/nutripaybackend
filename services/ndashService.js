@@ -94,13 +94,11 @@ async function assignDriverForLocation(deliveryLocationId) {
  * @returns {Promise<Object>}
  */
 async function generateVerificationCode(order) {
-  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-  const part1 = Array.from({ length: 4 }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
-  const part2 = Array.from({ length: 3 }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
-  const code = `NP-${part1}-${part2}`;
+  const digits = '0123456789';
+  const code6 = Array.from({ length: 6 }, () => digits[Math.floor(Math.random() * digits.length)]).join('');
+  const code = `NP-${code6}`;
   
-  const expiry = new Date();
-  expiry.setHours(23, 59, 59, 999);
+  const expiry = new Date(Date.now() + 48 * 60 * 60 * 1000); // 48 hours validity window
   
   order.deliveryVerificationCode = code;
   order.deliveryVerificationExpiry = expiry;

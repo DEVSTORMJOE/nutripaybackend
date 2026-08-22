@@ -405,16 +405,23 @@ const verifyDriverCode = async (req, res) => {
 
     const order = await ndashService.verifyDeliveryCode(req.params.id, code, req.user.id);
     
-    // Notify student in-app
-    const Notification = require('../models/Notification');
-    await Notification.create({
-      user: order.student._id || order.student,
-      type: 'delivery',
-      title: 'N-Dash Order Delivered ✅',
-      message: `Your N-Dash order #${order.orderId} has been successfully verified and delivered by the runner.`
-    });
-
+    // Send INSTANT success response to driver (< 100ms)
     res.json({ message: 'Delivery successfully verified and completed', status: order.status });
+
+    // Notify student in-app asynchronously
+    setImmediate(async () => {
+      try {
+        const Notification = require('../models/Notification');
+        await Notification.create({
+          user: order.student._id || order.student,
+          type: 'delivery',
+          title: 'N-Dash Order Delivered ✅',
+          message: `Your N-Dash order #${order.orderId} has been successfully verified and delivered by the runner.`
+        });
+      } catch (notifErr) {
+        console.error('[Background N-Dash Notification Error]:', notifErr.message || notifErr);
+      }
+    });
   } catch (error) {
     console.error('N-Dash verifyDriverCode error:', error.message);
     res.status(400).json({ message: error.message });

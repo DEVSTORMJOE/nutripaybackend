@@ -735,6 +735,102 @@ const assignDriverToOrder = async (req, res) => {
   }
 };
 
+// @desc    Override delivery confirmation by Admin
+// @route   POST /api/admin/orders/:id/override-delivery
+// @access  Private (Admin)
+const overrideDeliveryOrder = async (req, res) => {
+  const { id } = req.params;
+  try {
+    const delivery = await Delivery.findById(id)
+      .populate("student", "name email phone")
+      .populate({
+        path: "vendor",
+        populate: { path: "user", select: "name email phone" },
+      });
+
+    if (!delivery) {
+      return res.status(404).json({ message: "Delivery order not found." });
+    }
+
+    if (delivery.status === "delivered") {
+      return res.status(400).json({ message: "Order is already marked as delivered." });
+    }
+
+    // Force mark order as delivered
+    delivery.status = "delivered";
+    delivery.deliveredAt = Date.now();
+    if (!delivery.deliveryAgent) {
+      delivery.deliveryAgent = req.user.id;
+    }
+    await delivery.save();
+
+    // Send INSTANT success response to admin (< 100ms)
+    res.json({ message: "Delivery confirmed via Admin override successfully.", delivery });
+
+    // Execute Escrow Payout, Subscriptions, Audit Logs & Notifications asynchronously in background
+    setImmediate(async () => {
+      // 1. Release vendor payout from custodial escrow
+      try {
+        await escrowService.releaseDailyVendorPayment(id);
+      } catch (payoutError) {
+        console.error("[Background Admin Override Payout Error]:", payoutError.message || payoutError);
+      }
+
+      // 2. Auto-complete active subscription if all deliveries fulfilled
+      try {
+        const studentId = delivery.student?._id || delivery.student;
+        if (studentId) {
+          const subscriptionService = require("../services/subscriptionService");
+          await subscriptionService.checkAndAutoCompleteSubscriptions(studentId);
+        }
+      } catch (subErr) {
+        console.error("[Background Admin Override Subscription Error]:", subErr.message || subErr);
+      }
+
+      // 3. Log Audit event
+      try {
+        const NDashAuditLog = require("../models/NDashAuditLog");
+        await NDashAuditLog.create({
+          action: "ADMIN_DELIVERY_OVERRIDE",
+          user: req.user.id,
+          details: `Admin ${req.user.name || req.user.email} force-confirmed delivery #${String(delivery._id).slice(-6)} (Code: ${delivery.deliveryVerificationCode || "None"})`
+        });
+      } catch (auditErr) {
+        console.error("[Background Admin Override Audit Error]:", auditErr.message || auditErr);
+      }
+
+      // 4. Notify vendor & student
+      try {
+        const Notification = require("../models/Notification");
+        if (delivery.vendor && delivery.vendor.user) {
+          const vendorUserId = delivery.vendor.user._id || delivery.vendor.user;
+          await Notification.create({
+            user: vendorUserId,
+            type: "alert",
+            title: "Delivery Admin Override 🛡️",
+            message: `Admin force-confirmed delivery #${String(delivery._id).slice(-6)}. Escrow payout triggered.`,
+          });
+        }
+
+        if (delivery.student) {
+          const studentUserId = delivery.student._id || delivery.student;
+          await Notification.create({
+            user: studentUserId,
+            type: "delivery",
+            title: "Delivery Confirmed by Admin 🛡️",
+            message: `Your order #${String(delivery._id).slice(-6)} has been verified and marked delivered by Admin override.`,
+          });
+        }
+      } catch (notifErr) {
+        console.error("[Background Admin Override Notification Error]:", notifErr.message || notifErr);
+      }
+    });
+  } catch (error) {
+    console.error("Admin override delivery failed:", error);
+    res.status(500).json({ message: "Failed to override delivery: " + error.message });
+  }
+};
+
 // @desc    Get all delivery staff globally
 // @route   GET /api/admin/delivery-staff
 // @access  Private (Admin)
@@ -1532,6 +1628,7 @@ module.exports = {
   getWallets,
   getOrders,
   assignDriverToOrder,
+  overrideDeliveryOrder,
   getDeliveryStaff,
   approveDelivery,
   getWeeklyPlans,
