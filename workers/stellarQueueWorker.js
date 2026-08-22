@@ -38,8 +38,14 @@ async function processStellarJob(jobData) {
   
   switch (category) {
     case 'deposit':
-    case 'mpesa_direct_order':
       newTxHash = await stellarTreasuryService.mintNT(targetAmount);
+      break;
+
+    case 'mpesa_direct_order':
+      // Direct M-Pesa Quick Order: 1. Mint NT to Treasury, 2. Transfer Treasury -> Escrow
+      console.log(`[Stellar Worker] Processing mpesa_direct_order for ${targetAmount} KES: Minting to Treasury & locking to Escrow...`);
+      await stellarTreasuryService.mintNT(targetAmount);
+      newTxHash = await stellarTreasuryService.settleToEscrow(targetAmount);
       break;
       
     case 'subscription_lock':
