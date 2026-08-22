@@ -498,12 +498,12 @@ async function processMpesaDirectCustomOrder(checkoutRequestID, amountPaid, mpes
     ? await Transaction.create(txDocs, { session })
     : await Transaction.create(txDocs);
 
-  // 4. Queue on-chain transaction asynchronously to mint NutriTokens (NT) on Stellar
+  // 4. Queue on-chain transaction asynchronously to mint NutriTokens (NT) on Stellar & lock to Escrow
   try {
     const queueService = require('./queueService');
-    await queueService.addStellarJob('deposit', tx[0]._id, { amountKES: amountPaid });
+    await queueService.addStellarJob('mpesa_direct_order', tx[0]._id, { amountKES: amountPaid });
   } catch (queueErr) {
-    console.error("[Wallet Service] Failed to queue Stellar deposit job:", queueErr.message);
+    console.error("[Wallet Service] Failed to queue Stellar mpesa_direct_order job:", queueErr.message);
   }
 
   // 5. Create matching Delivery record for quick order (paymentReleased = false)
