@@ -63,7 +63,10 @@ function extractCloudinaryPublicId(url) {
 async function listMeals(req, res) {
   try {
     const active = req.query.active;
-    const cacheKey = `meals:list:active-${active || 'all'}`;
+    const categoryFilter = req.query.category;
+    const tierFilter = req.query.tier;
+
+    const cacheKey = `meals:list:active-${active || 'all'}:cat-${categoryFilter || 'all'}:tier-${tierFilter || 'all'}`;
     const cachedData = await cacheService.get(cacheKey);
     if (cachedData) {
       return res.json(cachedData);
@@ -72,12 +75,21 @@ async function listMeals(req, res) {
     const q = { approvalStatus: "approved" };
     if (active === "true") q.isActive = true;
 
+    if (categoryFilter) {
+      const normCat = normalizeCategory(categoryFilter);
+      if (normCat) q.category = normCat;
+    }
+
+    if (tierFilter && ["normal", "premium"].includes(String(tierFilter).toLowerCase())) {
+      q.tier = String(tierFilter).toLowerCase();
+    }
+
     const items = await Meal.find(q)
       .populate({
         path: "vendor",
         populate: { path: "user", select: "name" }
       })
-      .sort({ createdAt: -1 })
+      .sort({ priority: 1, price: 1 })
       .lean();
 
     await cacheService.set(cacheKey, items, 600); // Cache for 10 minutes
@@ -89,9 +101,9 @@ async function listMeals(req, res) {
 }
 
 function normalizeCategory(v) {
-  const c = String(v || "").toLowerCase();
-  if (!["main", "drink", "fruit"].includes(c)) return null;
-  return c;
+  const c = String(v || "").toLowerCase().trim().replace(/[\s-]/g, "_");
+  if (["main", "drink", "fruit", "fast_food"].includes(c)) return c;
+  return null;
 }
 
 function normalizeNutrition(n) {
@@ -119,6 +131,10 @@ async function createMeal(req, res) {
     const imageUrl = String(req.body.imageUrl || "").trim();
     const price = Number(req.body.price);
     const currency = String(req.body.currency || "KES").trim() || "KES";
+    const priority = Number.isFinite(Number(req.body.priority)) ? Number(req.body.priority) : 0;
+    const tier = ["normal", "premium"].includes(String(req.body.tier || "").toLowerCase())
+      ? String(req.body.tier).toLowerCase()
+      : "normal";
     const nutrition = normalizeNutrition(req.body.nutrition);
     const isActive = req.body.isActive === false ? false : true;
     const vendorId = req.body.vendorId || req.body.vendor || null;
@@ -136,12 +152,20 @@ async function createMeal(req, res) {
       imageUrl,
       price,
       currency,
+      priority,
+      tier,
       nutrition,
       isActive,
       approvalStatus: "approved", // Admin-created meals are auto-approved
     });
 
     await cacheService.delPattern("meals:*");
+
+    if (global.io) {
+      global.io.emit("meal:created", created.toObject());
+      global.io.emit("meal:updated", created.toObject());
+    }
+
     return res.status(201).json(created.toObject());
   } catch (e) {
     console.error("Error in createMeal:", e);
@@ -171,6 +195,16 @@ async function updateMeal(req, res) {
 
     if (req.body.currency !== undefined) patch.currency = String(req.body.currency || "KES").trim() || "KES";
 
+    if (req.body.priority !== undefined) {
+      const prio = Number(req.body.priority);
+      if (Number.isFinite(prio)) patch.priority = prio;
+    }
+
+    if (req.body.tier !== undefined) {
+      const t = String(req.body.tier || "").toLowerCase();
+      if (["normal", "premium"].includes(t)) patch.tier = t;
+    }
+
     if (req.body.nutrition !== undefined) patch.nutrition = normalizeNutrition(req.body.nutrition);
 
     if (req.body.isActive !== undefined) patch.isActive = Boolean(req.body.isActive);
@@ -185,6 +219,11 @@ async function updateMeal(req, res) {
     if (!updated) return res.status(404).json({ message: "Meal not found" });
 
     await cacheService.delPattern("meals:*");
+
+    if (global.io) {
+      global.io.emit("meal:updated", updated);
+    }
+
     return res.json(updated);
   } catch (e) {
     console.error("Error in updateMeal:", e);
@@ -201,6 +240,11 @@ async function setMealActive(req, res) {
     if (!updated) return res.status(404).json({ message: "Meal not found" });
 
     await cacheService.delPattern("meals:*");
+
+    if (global.io) {
+      global.io.emit("meal:updated", updated);
+    }
+
     return res.json(updated);
   } catch (e) {
     console.error("Error in setMealActive:", e);
@@ -231,6 +275,12 @@ async function deleteMeal(req, res) {
     await Meal.findByIdAndDelete(id);
 
     await cacheService.delPattern("meals:*");
+
+    if (global.io) {
+      global.io.emit("meal:deleted", { id });
+      global.io.emit("meal:updated", { id, deleted: true });
+    }
+
     return res.json({ ok: true, message: "Meal deleted successfully" });
   } catch (e) {
     console.error("Error in deleteMeal:", e);

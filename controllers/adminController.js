@@ -658,8 +658,36 @@ const getOrders = async (req, res) => {
       .limit(limit)
       .lean();
 
+    const Student = require('../models/Student');
+    const studentUserIds = orders.map(o => o.student?._id).filter(Boolean);
+    const studentProfiles = await Student.find({ user: { $in: studentUserIds } })
+      .select('user studentId hostel block floor room landmark university campus')
+      .lean();
+
+    const studentMap = studentProfiles.reduce((acc, s) => {
+      if (s.user) acc[s.user.toString()] = s;
+      return acc;
+    }, {});
+
+    const enrichedOrders = orders.map(order => {
+      const sData = order.student?._id ? studentMap[order.student._id.toString()] : null;
+      return {
+        ...order,
+        studentProfile: sData ? {
+          studentId: sData.studentId || '',
+          hostel: sData.hostel || '',
+          block: sData.block || '',
+          floor: sData.floor || '',
+          room: sData.room || '',
+          landmark: sData.landmark || '',
+          university: sData.university || '',
+          campus: sData.campus || ''
+        } : null
+      };
+    });
+
     res.json({
-      orders,
+      orders: enrichedOrders,
       pagination: {
         total: totalOrders,
         page,

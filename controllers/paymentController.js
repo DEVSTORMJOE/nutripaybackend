@@ -217,6 +217,11 @@ const createCustomOrder = async (req, res) => {
         console.warn("[PaymentController] Order SMS error (ignored):", smsErr.message);
       }
 
+      if (global.io) {
+        global.io.emit("order:created", customOrder);
+        global.io.emit("order:updated", customOrder);
+      }
+
       return res.json({
         success: true,
         message: "Custom order placed successfully using wallet balance!",

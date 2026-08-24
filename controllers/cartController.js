@@ -271,8 +271,9 @@ async function checkoutCart(req, res) {
           const weekdays = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
           const dayName = weekdays[scheduledDate.getDay()];
           const week = isWeeklyPlan ? 1 : Math.floor(dayOffset / 7) + 1;
+          const mappedWeek = week > 2 ? ((week - 1) % 2) + 1 : week;
 
-          const matchedPlan = plans.find(p => p.week === week && p.day === dayName);
+          const matchedPlan = plans.find(p => (p.week === week || p.week === mappedWeek) && p.day === dayName);
 
           for (const slot of slots) {
             let matchedMeal = null;
@@ -333,6 +334,11 @@ async function checkoutCart(req, res) {
       // 4. Clear Cart
       const CartModel = require('../models/Cart');
       await CartModel.findOneAndUpdate({ user: userId }, { templates: [], schedule: {} });
+
+      if (global.io) {
+        global.io.emit("order:created", { subscription, count: deliveriesToInsert.length });
+        global.io.emit("order:updated", { subscription });
+      }
 
       return res.json({
         ok: true,

@@ -21,11 +21,13 @@ const MealSchema = new mongoose.Schema(
       required: true
     },
     name: { type: String, required: true, trim: true },
-    category: { type: String, required: true, enum: ["main", "drink", "fruit"] },
+    category: { type: String, required: true, enum: ["main", "drink", "fruit", "fast_food"] },
     description: { type: String, default: "" },
     imageUrl: { type: String, default: "" },
     price: { type: mongoose.Schema.Types.Decimal128, required: true, min: 0 },
     currency: { type: String, default: "KES" },
+    priority: { type: Number, default: 0 },
+    tier: { type: String, enum: ["normal", "premium"], default: "normal" },
     nutrition: { type: NutritionSchema, default: () => ({}) },
     isActive: { type: Boolean, default: true },
     approvalStatus: {
