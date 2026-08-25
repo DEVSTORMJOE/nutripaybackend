@@ -81,7 +81,12 @@ async function listMeals(req, res) {
     }
 
     if (tierFilter && ["normal", "premium"].includes(String(tierFilter).toLowerCase())) {
-      q.tier = String(tierFilter).toLowerCase();
+      const t = String(tierFilter).toLowerCase();
+      if (t === "normal") {
+        q.$or = [{ tier: "normal" }, { tier: { $exists: false } }, { tier: null }, { tier: "" }];
+      } else {
+        q.tier = t;
+      }
     }
 
     const items = await Meal.find(q)
