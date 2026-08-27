@@ -40,7 +40,7 @@ async function notifyOrderPlacement(opts = {}) {
       `NutriPay Order Confirmation!\n` +
       `Hi ${studentName || 'Student'}, your ${orderType} ${orderId ? '#' + orderId + ' ' : ''}is received and is under processing.\n` +
       `Amount: ${formattedAmount}\n` +
-      `Thank you for ordering with NutriPay! 🍲`;
+      `Thank you for ordering with NutriPay!`;
 
     try {
       await sendSms(studentPhone, studentMsg);

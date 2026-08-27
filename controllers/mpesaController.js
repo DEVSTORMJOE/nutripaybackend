@@ -279,6 +279,36 @@ const mpesaCallback = async (req, res) => {
                     session
                 );
 
+                // Dispatch SMS notification to Student and Admin on successful PayHero payment
+                try {
+                  const User = require('../models/User');
+                  const studentUser = await User.findById(customOrder.user);
+                  if (studentUser) {
+                    const { notifyOrderPlacement } = require('../utils/orderSmsNotifier');
+                    const itemsSummary = (customOrder.items || []).map(i => `${i.name || 'Meal'} x${i.quantity || 1}`).join(', ');
+                    await notifyOrderPlacement({
+                      orderType: 'Instant / Quick Order (M-Pesa)',
+                      orderId: customOrder.orderId || customOrder._id.toString().slice(-8).toUpperCase(),
+                      studentName: studentUser.name,
+                      studentPhone: studentUser.phone,
+                      itemsSummary: itemsSummary || 'Quick Order Meal',
+                      amountKES: amountPaid
+                    });
+                  }
+                } catch (smsErr) {
+                  console.warn("[mpesaCallback] PayHero Order SMS error (ignored):", smsErr.message);
+                }
+
+                // Emit real-time WebSocket events for Admin and Vendor dashboards
+                try {
+                  if (global.io) {
+                    global.io.emit("order:created", customOrder);
+                    global.io.emit("order:updated", customOrder);
+                  }
+                } catch (sErr) {
+                  console.warn("[mpesaCallback] Socket emission error (ignored):", sErr.message);
+                }
+
                 return {
                     response: { ResponseCode: "0", ResponseDesc: "Success" },
                     needsMint: true,
@@ -390,15 +420,17 @@ const mpesaCallback = async (req, res) => {
                 customPlanRequest.paymentReference = mpesaReceiptNumber;
                 await customPlanRequest.save(session ? { session } : {});
 
-                // Emit real-time notification to student room
+                // Emit real-time notification to student room and global admin/vendor channels
                 try {
-                    const io = req.app.get('socketio');
+                    const io = req.app.get('socketio') || global.io;
                     if (io) {
                         io.to(`user_${studentId}`).emit('subscription_activated', {
                             subscriptionId: subscription._id,
                             message: "Custom Meal Plan subscribed and scheduled successfully!"
                         });
-                        console.log(`Socket notification emitted to user_${studentId} for custom plan activation`);
+                        io.emit('order:created', { subscription });
+                        io.emit('order:updated', { subscription });
+                        console.log(`Socket notification emitted for custom plan activation`);
                     }
                 } catch (sErr) {
                     console.error("Failed to emit socket notification for custom plan activation:", sErr);

@@ -241,10 +241,13 @@ global.io = io;
 io.on("connection", (socket) => {
   console.log("Real-time notification client connected:", socket.id);
 
-  // Users join a custom room matching their account ID
-  socket.on("join", (userId) => {
-    if (userId) {
-      const room = `user_${userId}`;
+  // Users, vendors, and admins join their respective rooms
+  socket.on("join", (target) => {
+    if (target) {
+      let room = target;
+      if (typeof target === 'string' && !target.startsWith('user_') && !target.startsWith('vendor_') && target !== 'admin_room') {
+        room = `user_${target}`;
+      }
       socket.join(room);
       console.log(`Socket ${socket.id} joined room ${room}`);
     }

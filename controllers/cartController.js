@@ -335,6 +335,21 @@ async function checkoutCart(req, res) {
       const CartModel = require('../models/Cart');
       await CartModel.findOneAndUpdate({ user: userId }, { templates: [], schedule: {} });
 
+      // Dispatch SMS to Student and Admin
+      try {
+        const { notifyOrderPlacement } = require('../utils/orderSmsNotifier');
+        notifyOrderPlacement({
+          orderType: 'Monthly Subscription Plan',
+          orderId: subscription._id.toString().slice(-8).toUpperCase(),
+          studentName: req.user.name || 'Student',
+          studentPhone: req.user.phone || '',
+          itemsSummary: `${deliveriesToInsert.length} Scheduled Deliveries`,
+          amountKES: subtotalKes
+        });
+      } catch (smsErr) {
+        console.warn("[cartController] Monthly checkout SMS error (ignored):", smsErr.message);
+      }
+
       if (global.io) {
         global.io.emit("order:created", { subscription, count: deliveriesToInsert.length });
         global.io.emit("order:updated", { subscription });
@@ -458,7 +473,27 @@ async function checkoutCart(req, res) {
       }
     }
 
-    // 4. Clear Cart
+    // 4. Dispatch SMS notification to Student & Admin
+    try {
+      const { notifyOrderPlacement } = require('../utils/orderSmsNotifier');
+      notifyOrderPlacement({
+        orderType: 'Scheduled Meal Order',
+        orderId: `CART_${userId.toString().slice(-6).toUpperCase()}`,
+        studentName: req.user.name || 'Student',
+        studentPhone: req.user.phone || '',
+        itemsSummary: `${deliveriesToInsert.length} Scheduled Deliveries`,
+        amountKES: subtotalKes
+      });
+    } catch (smsErr) {
+      console.warn("[cartController] Daily checkout SMS error (ignored):", smsErr.message);
+    }
+
+    if (global.io) {
+      global.io.emit("order:created", { deliveriesCount: deliveriesToInsert.length, userId });
+      global.io.emit("order:updated", { deliveriesCount: deliveriesToInsert.length, userId });
+    }
+
+    // 5. Clear Cart
     await Cart.findOneAndUpdate({ user: userId }, { schedule: {} });
 
     return res.json({
