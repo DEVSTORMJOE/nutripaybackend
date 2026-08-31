@@ -284,4 +284,12 @@ server.listen(PORT, () => {
   } catch (err) {
     console.error("Failed to start fee reserve scheduler:", err);
   }
+
+  // Start daily reserve snapshot scheduler
+  try {
+    require('./services/reserveSnapshotService');
+    console.log("Reserve Snapshot daily cron initialized.");
+  } catch (err) {
+    console.error("Failed to start Reserve Snapshot cron:", err);
+  }
 });
