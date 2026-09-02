@@ -488,8 +488,13 @@ const mpesaCallback = async (req, res) => {
             }
 
             if (!depositRecord) {
-                console.warn(`[REPLAY DETECTED] Webhook replayed for CheckoutRequestID ${checkoutRequestID}. Already completed or invalid.`);
-                return { response: { ResponseCode: "0", ResponseDesc: "Already processed" }, needsMint: false };
+                console.warn(`[Webhook Unmatched/Replayed] Callback for CheckoutRequestID ${checkoutRequestID} or reference ${externalReference}. No matching pending deposit found.`);
+                return { response: { ResponseCode: "0", ResponseDesc: "Already processed or unhandled" }, needsMint: false };
+            }
+
+            if (!userId) {
+                console.warn(`[Webhook User Missing] No valid userId associated with callback checkoutRequestID ${checkoutRequestID}.`);
+                return { response: { ResponseCode: "0", ResponseDesc: "Acknowledged" }, needsMint: false };
             }
 
             // 2. REPLAY ATTACK PREVENTION: Check if PaymentReference (mpesaReceiptNumber) was already processed
@@ -620,8 +625,8 @@ const mpesaCallback = async (req, res) => {
 
         return res.json(result?.response || { ResponseCode: "0", ResponseDesc: "Success" });
     } catch (e) {
-        console.error("Mpesa Callback processing error:", e);
-        res.status(500).json({ ResponseCode: "1", ResponseDesc: "Internal Server Error" });
+        console.error("Mpesa Callback processing error (handled):", e.message);
+        return res.json({ ResponseCode: "0", ResponseDesc: "Success (Handled)" });
     }
 };
 
