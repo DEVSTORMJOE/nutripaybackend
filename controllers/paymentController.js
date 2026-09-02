@@ -270,8 +270,20 @@ const createCustomOrder = async (req, res) => {
           orderId
         });
       } catch (err) {
-        console.warn("Direct Safaricom STK Push initiation timeout/warning:", err.message);
-        // Do NOT mark order as failed on initiation timeout. Keep as pending_payment pre-linked with externalRef
+        console.warn("Direct Safaricom STK Push initiation warning/error:", err.message);
+        
+        // If PayHero explicitly returned an HTTP error response (e.g. 504 Gateway Timeout, 400, 500),
+        // the gateway failed immediately and NO prompt was sent to Safaricom/user phone.
+        if (err.isGatewayError || err.statusCode) {
+          customOrder.status = 'failed';
+          await customOrder.save();
+          return res.status(400).json({
+            success: false,
+            message: `M-Pesa Gateway error (${err.statusCode || 504}). PayHero is currently experiencing network delays. Please try again or pay via your Nutri Wallet.`
+          });
+        }
+
+        // Only for un-responded connection timeouts (ECONNABORTED), keep pending_payment for callback recovery
         customOrder.status = 'pending_payment';
         customOrder.checkoutRequestID = externalRef;
         await customOrder.save();

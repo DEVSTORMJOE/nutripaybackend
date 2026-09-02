@@ -66,7 +66,10 @@ async function initiateDeposit(userId, phone, amountKes, orderType = 'monthly_su
     };
   } catch (err) {
     console.error("PayHero STK Push initiation failed:", err.response?.data || err.message);
-    throw new Error(`PayHero STK Push failed: ${err.response?.data?.message || err.response?.data?.error_message || err.message}`);
+    const errorObj = new Error(`PayHero STK Push failed: ${err.response?.data?.message || err.response?.data?.error_message || err.message}`);
+    errorObj.statusCode = err.response?.status;
+    errorObj.isGatewayError = !!err.response;
+    throw errorObj;
   }
 }
 
