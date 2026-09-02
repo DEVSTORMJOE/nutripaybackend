@@ -459,11 +459,18 @@ async function processWalletCustomOrder(userId, vendorUserId, items, totalCost, 
 /**
  * Process a successful direct M-Pesa custom order checkout into Escrow (locked balance)
  */
-async function processMpesaDirectCustomOrder(checkoutRequestID, amountPaid, mpesaReceiptNumber, phonePaidFrom, session = null) {
+async function processMpesaDirectCustomOrder(customOrderOrId, amountPaid, mpesaReceiptNumber, phonePaidFrom, session = null) {
   const CustomOrder = require('../models/CustomOrder');
   
-  const order = session ? await CustomOrder.findOne({ checkoutRequestID }).session(session) : await CustomOrder.findOne({ checkoutRequestID });
-  if (!order) throw new Error(`Custom order with checkoutRequestID ${checkoutRequestID} not found`);
+  let order = null;
+  if (typeof customOrderOrId === 'object' && customOrderOrId !== null && customOrderOrId._id) {
+    order = customOrderOrId;
+  } else if (mongoose.Types.ObjectId.isValid(customOrderOrId)) {
+    order = session ? await CustomOrder.findById(customOrderOrId).session(session) : await CustomOrder.findById(customOrderOrId);
+  } else {
+    order = session ? await CustomOrder.findOne({ checkoutRequestID: customOrderOrId }).session(session) : await CustomOrder.findOne({ checkoutRequestID: customOrderOrId });
+  }
+  if (!order) throw new Error(`Custom order with reference ${customOrderOrId} not found`);
   
   if (order.status === 'preparing' || order.status === 'ready' || order.status === 'delivered') {
     return { alreadyProcessed: true };

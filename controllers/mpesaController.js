@@ -272,7 +272,7 @@ const mpesaCallback = async (req, res) => {
                 const { amountPaid, mpesaReceiptNumber, phonePaidFrom } = callbackVerification;
                 
                 const directRes = await walletService.processMpesaDirectCustomOrder(
-                    customOrder.checkoutRequestID || checkoutRequestID,
+                    customOrder,
                     amountPaid,
                     mpesaReceiptNumber,
                     phonePaidFrom,

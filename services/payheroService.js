@@ -51,7 +51,7 @@ async function initiateDeposit(userId, phone, amountKes, orderType = 'monthly_su
           'Authorization': authHeader,
           'Content-Type': 'application/json'
         },
-        timeout: 15000
+        timeout: 35000
       }
     );
 

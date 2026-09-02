@@ -236,9 +236,9 @@ const createCustomOrder = async (req, res) => {
         return res.status(400).json({ message: "Phone number is required for direct M-Pesa push." });
       }
 
-      const reference = crypto.randomUUID();
+      const externalRef = `quick_order_${user._id}_${Date.now()}`;
 
-      // Create pending order
+      // Create pending order pre-linked with externalRef so callback can always match it
       const customOrder = await CustomOrder.create({
         orderId,
         user: user._id,
@@ -249,7 +249,7 @@ const createCustomOrder = async (req, res) => {
         paymentMethod: 'mpesa_direct',
         paymentSource: 'mpesa_direct',
         status: 'pending_payment',
-        checkoutRequestID: reference,
+        checkoutRequestID: externalRef,
         deliveryLocation: deliveryLocation || user.location || 'Campus'
       });
 
@@ -258,21 +258,30 @@ const createCustomOrder = async (req, res) => {
       try {
         const data = await paymentGatewayService.initiateDeposit(user ? user._id : 'guest', pushPhone, totalCost, 'quick_order');
         const safaricomID = data.CheckoutRequestID;
-        customOrder.checkoutRequestID = safaricomID;
-        await customOrder.save();
+        if (safaricomID) {
+          customOrder.checkoutRequestID = safaricomID;
+          await customOrder.save();
+        }
 
         return res.json({
           success: true,
           message: "STK Push sent successfully via Safaricom! Please authorize on your phone...",
-          reference: safaricomID,
+          reference: safaricomID || externalRef,
           orderId
         });
       } catch (err) {
-        console.error("Direct Safaricom STK Push error:", err.message);
-        customOrder.status = 'failed';
+        console.warn("Direct Safaricom STK Push initiation timeout/warning:", err.message);
+        // Do NOT mark order as failed on initiation timeout. Keep as pending_payment pre-linked with externalRef
+        customOrder.status = 'pending_payment';
+        customOrder.checkoutRequestID = externalRef;
         await customOrder.save();
-        return res.status(400).json({
-          message: `M-Pesa STK Push failed: ${err.response?.data?.errorMessage || err.message || 'Payment initiation failed'}. Please try again.`
+
+        return res.json({
+          success: true,
+          pending: true,
+          message: "STK Push initiated to your phone. Please check your screen and enter your M-Pesa PIN...",
+          reference: externalRef,
+          orderId
         });
       }
     }
