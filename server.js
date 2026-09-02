@@ -292,4 +292,12 @@ server.listen(PORT, () => {
   } catch (err) {
     console.error("Failed to start Reserve Snapshot cron:", err);
   }
+
+  // Start order reconciliation worker (polls pending M-Pesa orders every 2 minutes)
+  try {
+    require('./services/orderReconciliationService');
+    console.log("Order Reconciliation background worker initialized.");
+  } catch (err) {
+    console.error("Failed to start Order Reconciliation worker:", err);
+  }
 });

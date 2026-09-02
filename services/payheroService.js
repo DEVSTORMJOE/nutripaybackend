@@ -42,34 +42,116 @@ async function initiateDeposit(userId, phone, amountKes, orderType = 'monthly_su
     callback_url: `${callbackUrl}/${userId}`
   };
 
-  try {
-    const response = await axios.post(
-      getPayHeroApiUrl(),
-      payload,
-      {
-        headers: {
-          'Authorization': authHeader,
-          'Content-Type': 'application/json'
-        },
-        timeout: 35000
+  const maxRetries = 2;
+  let lastError;
+
+  for (let attempt = 1; attempt <= maxRetries + 1; attempt++) {
+    try {
+      if (attempt > 1) {
+        console.log(`[PayHero STK Push] Retrying initiation (Attempt ${attempt} of ${maxRetries + 1})...`);
       }
-    );
+
+      const response = await axios.post(
+        getPayHeroApiUrl(),
+        payload,
+        {
+          headers: {
+            'Authorization': authHeader,
+            'Content-Type': 'application/json'
+          },
+          timeout: 35000
+        }
+      );
+
+      return {
+        success: response.data.status === 'SUCCESS' || response.data.success === true || response.data.code === 200,
+        provider: "payhero",
+        CheckoutRequestID: response.data.checkout_id || response.data.CheckoutRequestID || response.data.MerchantRequestID || response.data.reference || `PH_${crypto.randomBytes(6).toString('hex')}`,
+        reference,
+        ResponseCode: "0",
+        CustomerMessage: response.data.message || "PayHero STK Push initiated successfully",
+        raw: response.data
+      };
+    } catch (err) {
+      lastError = err;
+      const statusCode = err.response?.status;
+      console.warn(`[PayHero STK Push] Attempt ${attempt} failed (Status: ${statusCode || 'Network error'}):`, err.response?.data || err.message);
+
+      // Do not retry 4xx errors (e.g. 400 Bad Request or 401 Unauthorized), except rate limit 429
+      if (statusCode && statusCode >= 400 && statusCode < 500 && statusCode !== 429) {
+        break;
+      }
+
+      if (attempt <= maxRetries) {
+        console.log(`[PayHero STK Push] Waiting 1.5s before retry ${attempt + 1}...`);
+        await new Promise(resolve => setTimeout(resolve, 1500));
+      }
+    }
+  }
+
+  console.error("PayHero STK Push initiation failed after retries:", lastError?.response?.data || lastError?.message);
+  const errorObj = new Error(`PayHero STK Push failed: ${lastError?.response?.data?.message || lastError?.response?.data?.error_message || lastError?.message}`);
+  errorObj.statusCode = lastError?.response?.status;
+  errorObj.isGatewayError = !!lastError?.response;
+  throw errorObj;
+}
+
+/**
+ * Query PayHero API for payment status by external reference
+ */
+async function checkTransactionStatus(reference) {
+  if (!reference) return null;
+
+  const apiKey = process.env.PAYHERO_API_KEY || process.env.API_USERNAME;
+  const apiSecret = process.env.PAYHERO_API_SECRET || process.env.API_PASSWORD;
+
+  if (!apiKey) return null;
+
+  const authHeader = `Basic ${Buffer.from(`${apiKey}:${apiSecret || ''}`).toString('base64')}`;
+
+  try {
+    const url = `${getPayHeroApiUrl()}?external_reference=${encodeURIComponent(reference)}`;
+    const response = await axios.get(url, {
+      headers: {
+        'Authorization': authHeader,
+        'Content-Type': 'application/json'
+      },
+      timeout: 15000
+    });
+
+    const data = response.data;
+    const transactions = Array.isArray(data) ? data : (data?.response || data?.results || data?.data || [data]);
+    
+    if (!transactions || transactions.length === 0) {
+      return null;
+    }
+
+    // Find matching transaction
+    const tx = transactions.find(t => 
+      t.external_reference === reference || 
+      t.ExternalReference === reference ||
+      t.checkout_id === reference ||
+      t.CheckoutRequestID === reference
+    ) || transactions[0];
+
+    const rawStatus = String(tx.Status || tx.status || tx.ResultDesc || '').toUpperCase();
+    const resultCode = tx.ResultCode !== undefined ? tx.ResultCode : (tx.result_code !== undefined ? tx.result_code : null);
+    
+    const isSuccess = rawStatus.includes('SUCCESS') || rawStatus.includes('COMPLETED') || tx.success === true || resultCode === 0 || resultCode === '0';
+    const isFailed = rawStatus.includes('FAIL') || rawStatus.includes('CANCEL') || resultCode === 1032 || resultCode === 1;
 
     return {
-      success: response.data.status === 'SUCCESS' || response.data.success === true || response.data.code === 200,
-      provider: "payhero",
-      CheckoutRequestID: response.data.checkout_id || response.data.CheckoutRequestID || response.data.MerchantRequestID || response.data.reference || `PH_${crypto.randomBytes(6).toString('hex')}`,
-      reference,
-      ResponseCode: "0",
-      CustomerMessage: response.data.message || "PayHero STK Push initiated successfully",
-      raw: response.data
+      found: true,
+      success: isSuccess,
+      failed: isFailed,
+      receiptNumber: tx.MpesaReceiptNumber || tx.mpesa_code || tx.receipt || '',
+      amount: Number(tx.Amount || tx.amount || 0),
+      phone: tx.Phone || tx.phone_number || tx.phone || '',
+      raw: tx
     };
   } catch (err) {
-    console.error("PayHero STK Push initiation failed:", err.response?.data || err.message);
-    const errorObj = new Error(`PayHero STK Push failed: ${err.response?.data?.message || err.response?.data?.error_message || err.message}`);
-    errorObj.statusCode = err.response?.status;
-    errorObj.isGatewayError = !!err.response;
-    throw errorObj;
+    console.warn(`[PayHero Status Check] Error checking status for reference ${reference}:`, err.message);
+    return null;
   }
 }
 
@@ -151,5 +233,6 @@ function verifyCallback(body) {
 
 module.exports = {
   initiateDeposit,
-  verifyCallback
+  verifyCallback,
+  checkTransactionStatus
 };
