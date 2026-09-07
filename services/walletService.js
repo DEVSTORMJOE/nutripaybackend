@@ -568,6 +568,7 @@ async function processMpesaDirectCustomOrder(customOrderOrId, amountPaid, mpesaR
     })(),
     location: fullLocation || order.deliveryLocation || 'Campus',
     deliveryLocation: resolvedLocId || null,
+    deliveryNote: order.deliveryNote || "",
     paymentReleased: false,
     isCustom: true
   }], session ? { session } : {});
