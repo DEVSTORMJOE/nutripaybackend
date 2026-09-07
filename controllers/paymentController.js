@@ -58,6 +58,7 @@ const createCustomOrder = async (req, res) => {
       items, // [{ name, quantity, price }]
       totalCost,
       deliveryLocation,
+      deliveryNote,
       phone // Override or custom push phone
     } = req.body;
 
@@ -130,7 +131,8 @@ const createCustomOrder = async (req, res) => {
         paymentMethod: 'wallet',
         paymentSource: 'student_wallet',
         status: 'preparing', // Paid and instantly in preparation
-        deliveryLocation: deliveryLocation || user.location || 'Campus'
+        deliveryLocation: deliveryLocation || user.location || 'Campus',
+        deliveryNote: deliveryNote || ""
       });
 
       // Inherit student hostel DeliveryLocation and create immediate Delivery record
@@ -188,6 +190,7 @@ const createCustomOrder = async (req, res) => {
         })(),
         location: fullLocation || deliveryLocation || 'Campus',
         deliveryLocation: resolvedLocId || null,
+        deliveryNote: deliveryNote || "",
         isCustom: true
       });
 
@@ -250,7 +253,8 @@ const createCustomOrder = async (req, res) => {
         paymentSource: 'mpesa_direct',
         status: 'pending_payment',
         checkoutRequestID: externalRef,
-        deliveryLocation: deliveryLocation || user.location || 'Campus'
+        deliveryLocation: deliveryLocation || user.location || 'Campus',
+        deliveryNote: deliveryNote || ""
       });
 
       // Payment gateway unified STK Push

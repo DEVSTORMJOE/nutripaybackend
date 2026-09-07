@@ -36,11 +36,13 @@ async function sendOrderNotification(order, driverUser) {
   }
 
   const itemsText = order.items.map(item => `* ${item.name} (Qty: ${item.quantity})`).join('\n');
+  const noteText = order.deliveryNote ? `\nNote: ${order.deliveryNote}` : '';
+
   const message = `N-Dash Order #${order.orderId}
 
 Student: ${order.student?.name || 'Student'}
 Phone: ${order.student?.phone || 'N/A'}
-${locationDetail}
+${locationDetail}${noteText}
 
 Items:
 ${itemsText}

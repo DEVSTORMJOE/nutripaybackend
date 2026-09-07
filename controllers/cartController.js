@@ -69,6 +69,7 @@ async function clearCart(req, res) {
 async function checkoutCart(req, res) {
   try {
     const userId = req.user.id;
+    const deliveryNote = req.body?.deliveryNote || "";
     const cart = await Cart.findOne({ user: userId }).lean();
     if (!cart) {
       return res.status(400).json({ message: "Cart is empty" });
@@ -254,7 +255,8 @@ async function checkoutCart(req, res) {
               timeSlot: slot,
               scheduledDate: scheduledDate,
               location: hostelResidence,
-              deliveryLocation: deliveryLocationId
+              deliveryLocation: deliveryLocationId,
+              deliveryNote: deliveryNote
             });
           }
         }
@@ -302,7 +304,8 @@ async function checkoutCart(req, res) {
               timeSlot: slot,
               scheduledDate: scheduledDate,
               location: hostelResidence,
-              deliveryLocation: deliveryLocationId
+              deliveryLocation: deliveryLocationId,
+              deliveryNote: deliveryNote
             });
           }
         }
@@ -444,7 +447,8 @@ async function checkoutCart(req, res) {
           timeSlot: day.timeSlot || 'Lunch',
           scheduledDate: new Date(date),
           location: hostelResidence,
-          deliveryLocation: deliveryLocationId
+          deliveryLocation: deliveryLocationId,
+          deliveryNote: deliveryNote
         });
       }
     }

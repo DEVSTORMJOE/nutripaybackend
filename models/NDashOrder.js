@@ -40,6 +40,10 @@ const nDashOrderSchema = new mongoose.Schema({
     type: String,
     required: true
   },
+  deliveryNote: {
+    type: String,
+    default: ""
+  },
   deliveryAgent: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User'

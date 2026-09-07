@@ -20,6 +20,10 @@ const customOrderSchema = new mongoose.Schema({
     phone: String,
     deliveryLocation: String
   },
+  deliveryNote: {
+    type: String,
+    default: ""
+  },
   vendor: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Vendor',

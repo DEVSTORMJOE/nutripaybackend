@@ -36,7 +36,7 @@ function extractCloudinaryPublicId(url) {
 // Place N-Dash Order & Trigger STK Push
 const placeOrder = async (req, res) => {
   try {
-    const { items, deliveryLocationId, customLocation, room, phone } = req.body;
+    const { items, deliveryLocationId, customLocation, room, phone, deliveryNote } = req.body;
     const studentId = req.user.id;
 
     if (!items || !Array.isArray(items) || items.length === 0) {
@@ -81,6 +81,7 @@ const placeOrder = async (req, res) => {
       deliveryLocation: isValidLocId ? deliveryLocationId : undefined,
       customLocation: !isValidLocId ? (customLocation || deliveryLocationId) : undefined,
       room,
+      deliveryNote: deliveryNote || "",
       deliveryAgent,
       status: 'pending_payment'
     });

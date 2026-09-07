@@ -63,6 +63,10 @@ const deliverySchema = new mongoose.Schema({
     ref: 'DeliveryLocation',
     default: null
   },
+  deliveryNote: {
+    type: String,
+    default: ""
+  },
   originalStudent: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User'
