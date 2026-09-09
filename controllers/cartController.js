@@ -106,6 +106,22 @@ async function checkoutCart(req, res) {
         return res.status(404).json({ message: "Student profile not found." });
       }
 
+      // Enforce profile completion (phone and hostel/location) before subscription checkout
+      const User = require('../models/User');
+      const studentUser = await User.findById(userId);
+      const hasPhone = Boolean(studentUser && studentUser.phone && studentUser.phone.trim().length > 0);
+      const hasHostelOrLocation = Boolean(
+        (studentProfile.hostel && studentProfile.hostel.trim() !== '' && studentProfile.hostel.trim() !== 'Campus') ||
+        studentProfile.deliveryLocation
+      );
+
+      if (!hasPhone || !hasHostelOrLocation) {
+        return res.status(403).json({
+          message: "Please complete your profile details (select hostel location and phone number) before checking out.",
+          requiresProfileCompletion: true
+        });
+      }
+
       studentProfile.subscriptionActive = true;
       await studentProfile.save();
 

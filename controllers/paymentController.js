@@ -73,6 +73,22 @@ const createCustomOrder = async (req, res) => {
       return res.status(403).json({ message: "Only registered students can place custom orders." });
     }
 
+    // Enforce profile completion (phone and hostel/location) before ordering
+    const Student = require('../models/Student');
+    const studentProfile = await Student.findOne({ user: user._id });
+    const hasPhone = Boolean(user.phone && user.phone.trim().length > 0);
+    const hasHostelOrLocation = Boolean(
+      (studentProfile && studentProfile.hostel && studentProfile.hostel.trim() !== '' && studentProfile.hostel.trim() !== 'Campus') ||
+      (studentProfile && studentProfile.deliveryLocation)
+    );
+
+    if (!studentProfile || !hasPhone || !hasHostelOrLocation) {
+      return res.status(403).json({
+        message: "Please complete your profile details (select hostel location and phone number) before placing an order.",
+        requiresProfileCompletion: true
+      });
+    }
+
     // Verify vendor
     let targetVendorId = vendorId;
     if (!targetVendorId && items && items.length > 0) {
