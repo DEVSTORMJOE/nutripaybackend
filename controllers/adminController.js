@@ -778,6 +778,53 @@ const updateDishStatus = async (req, res) => {
   }
 };
 
+// @desc    Bulk update order dish collection status
+// @route   PUT /api/admin/orders/bulk-dish-status
+// @access  Private (Admin)
+const bulkUpdateDishStatus = async (req, res) => {
+  try {
+    const { orderIds, dishCollected = true, mealType, status, hostel, startDate, endDate } = req.body;
+
+    let query = {};
+
+    if (Array.isArray(orderIds) && orderIds.length > 0) {
+      query._id = { $in: orderIds };
+    } else {
+      if (mealType) query.timeSlot = mealType;
+      if (status) query.status = status;
+      if (hostel) query.location = hostel;
+
+      if (startDate || endDate) {
+        query.scheduledDate = {};
+        if (startDate) query.scheduledDate.$gte = new Date(startDate);
+        if (endDate) {
+          const end = new Date(endDate);
+          end.setHours(23, 59, 59, 999);
+          query.scheduledDate.$lte = end;
+        }
+      }
+      query.dishCollected = false;
+    }
+
+    const isCollected = Boolean(dishCollected);
+    const updateData = {
+      dishCollected: isCollected,
+      dishCollectedAt: isCollected ? new Date() : null,
+      dishCollectedBy: isCollected ? req.user.id : null
+    };
+
+    const result = await Delivery.updateMany(query, { $set: updateData });
+
+    res.json({
+      message: `Successfully marked ${result.modifiedCount} order delivery container(s) as ${isCollected ? 'Collected' : 'Pending Return'}.`,
+      modifiedCount: result.modifiedCount
+    });
+  } catch (error) {
+    console.error("Bulk update dish status error:", error);
+    res.status(500).json({ message: 'Failed to bulk update dish status: ' + error.message });
+  }
+};
+
 // @desc    Assign a driver to an order (override)
 // @route   POST /api/admin/orders/:id/assign-driver
 // @access  Private (Admin)
@@ -1733,6 +1780,7 @@ module.exports = {
   getWallets,
   getOrders,
   updateDishStatus,
+  bulkUpdateDishStatus,
   assignDriverToOrder,
   overrideDeliveryOrder,
   getDeliveryStaff,
