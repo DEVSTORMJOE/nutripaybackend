@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { getDashboard, approveMeal, getUsers, getPendingApprovals, approveVendor, getVendors, getWallets, updateWalletStatus, getTransactions, createUser, updateUser, createVendor, getMeals, updateMealApproval, getOrders, assignDriverToOrder, overrideDeliveryOrder, getDeliveryStaff, approveDelivery, getWeeklyPlans, updateWeeklyPlan, resetWeeklyPlan, getWithdrawalRequests, handleWithdrawalRequest, assignLocationsToDriver, getRefundRequests, handleRefundApproval, getErrorLogs, resolveErrorLog } = require('../controllers/adminController');
+const { getDashboard, approveMeal, getUsers, getPendingApprovals, approveVendor, getVendors, getWallets, updateWalletStatus, getTransactions, createUser, updateUser, createVendor, getMeals, updateMealApproval, getOrders, updateDishStatus, assignDriverToOrder, overrideDeliveryOrder, getDeliveryStaff, approveDelivery, getWeeklyPlans, updateWeeklyPlan, resetWeeklyPlan, getWithdrawalRequests, handleWithdrawalRequest, assignLocationsToDriver, getRefundRequests, handleRefundApproval, getErrorLogs, resolveErrorLog } = require('../controllers/adminController');
 const { protect } = require('../middleware/authMiddleware');
 const { role } = require('../middleware/roleMiddleware');
 
@@ -19,6 +19,7 @@ router.post('/approve/vendor', protect, role('admin'), approveVendor);
 router.get('/meals', protect, role('admin'), getMeals);
 router.patch('/meals/:id/approval', protect, role('admin'), updateMealApproval);
 router.get('/orders', protect, role('admin'), getOrders);
+router.put('/orders/:id/dish-status', protect, role('admin'), updateDishStatus);
 router.post('/orders/:id/assign-driver', protect, role('admin'), assignDriverToOrder);
 router.post('/orders/:id/override-delivery', protect, role('admin'), overrideDeliveryOrder);
 router.get('/delivery-staff', protect, role('admin'), getDeliveryStaff);

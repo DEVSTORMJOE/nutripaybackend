@@ -79,7 +79,20 @@ const deliverySchema = new mongoose.Schema({
     type: Boolean,
     default: false
   },
-  claimedAt: Date
+  claimedAt: Date,
+  dishCount: {
+    type: Number,
+    default: 0
+  },
+  dishCollected: {
+    type: Boolean,
+    default: false
+  },
+  dishCollectedAt: Date,
+  dishCollectedBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User'
+  }
 }, { timestamps: true });
 
 deliverySchema.pre('save', async function (next) {

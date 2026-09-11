@@ -644,6 +644,32 @@ const getOrders = async (req, res) => {
       }
     }
 
+    // Dish Status Filter
+    if (req.query.dishStatus === 'pending_collection') {
+      query.dishCollected = false;
+    } else if (req.query.dishStatus === 'collected') {
+      query.dishCollected = true;
+    }
+
+    // Calculate aggregated dish metrics based on current filters (excluding dishCollected toggle filter)
+    const baseDishQuery = { ...query };
+    delete baseDishQuery.dishCollected;
+    const allFilteredOrdersForDishes = await Delivery.find(baseDishQuery).select('items dishCount dishCollected').lean();
+    
+    let totalDishes = 0;
+    let pendingDishes = 0;
+    let collectedDishes = 0;
+
+    allFilteredOrdersForDishes.forEach(o => {
+      const cnt = o.dishCount || (o.items && o.items.length > 0 ? o.items.reduce((sum, it) => sum + (it.quantity || 1), 0) : 1);
+      totalDishes += cnt;
+      if (o.dishCollected) {
+        collectedDishes += cnt;
+      } else {
+        pendingDishes += cnt;
+      }
+    });
+
     const totalOrders = await Delivery.countDocuments(query);
     const orders = await Delivery.find(query)
       .populate('student', 'name email role phone')
@@ -671,8 +697,10 @@ const getOrders = async (req, res) => {
 
     const enrichedOrders = orders.map(order => {
       const sData = order.student?._id ? studentMap[order.student._id.toString()] : null;
+      const computedDishCount = order.dishCount || (order.items && order.items.length > 0 ? order.items.reduce((sum, it) => sum + (it.quantity || 1), 0) : 1);
       return {
         ...order,
+        dishCount: computedDishCount,
         studentProfile: sData ? {
           studentId: sData.studentId || '',
           hostel: sData.hostel || '',
@@ -688,6 +716,11 @@ const getOrders = async (req, res) => {
 
     res.json({
       orders: enrichedOrders,
+      dishMetrics: {
+        totalDishes,
+        pendingDishes,
+        collectedDishes
+      },
       pagination: {
         total: totalOrders,
         page,
@@ -698,6 +731,50 @@ const getOrders = async (req, res) => {
   } catch (error) {
     console.error("Admin getting orders failed:", error);
     res.status(500).json({ message: 'Failed to fetch orders: ' + error.message });
+  }
+};
+
+// @desc    Update order dish collection status
+// @route   PUT /api/admin/orders/:id/dish-status
+// @access  Private (Admin)
+const updateDishStatus = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { dishCollected, dishCount } = req.body;
+
+    const delivery = await Delivery.findById(id);
+    if (!delivery) {
+      return res.status(404).json({ message: 'Order delivery record not found.' });
+    }
+
+    if (dishCollected !== undefined) {
+      delivery.dishCollected = Boolean(dishCollected);
+      if (delivery.dishCollected) {
+        delivery.dishCollectedAt = new Date();
+        delivery.dishCollectedBy = req.user.id;
+      } else {
+        delivery.dishCollectedAt = null;
+        delivery.dishCollectedBy = null;
+      }
+    }
+
+    if (dishCount !== undefined && !isNaN(parseInt(dishCount))) {
+      delivery.dishCount = parseInt(dishCount);
+    } else if (!delivery.dishCount || delivery.dishCount === 0) {
+      delivery.dishCount = delivery.items && delivery.items.length > 0
+        ? delivery.items.reduce((sum, it) => sum + (it.quantity || 1), 0)
+        : 1;
+    }
+
+    await delivery.save();
+
+    res.json({
+      message: `Dish collection status updated to ${delivery.dishCollected ? 'Collected' : 'Pending Return'}.`,
+      delivery
+    });
+  } catch (error) {
+    console.error("Update dish status error:", error);
+    res.status(500).json({ message: 'Failed to update dish status: ' + error.message });
   }
 };
 
@@ -1655,6 +1732,7 @@ module.exports = {
   getVendors,
   getWallets,
   getOrders,
+  updateDishStatus,
   assignDriverToOrder,
   overrideDeliveryOrder,
   getDeliveryStaff,
