@@ -647,6 +647,7 @@ const getOrders = async (req, res) => {
     // Dish Status Filter
     if (req.query.dishStatus === 'pending_collection') {
       query.dishCollected = false;
+      query.status = 'delivered';
     } else if (req.query.dishStatus === 'collected') {
       query.dishCollected = true;
     }
@@ -654,7 +655,10 @@ const getOrders = async (req, res) => {
     // Calculate aggregated dish metrics based on current filters (excluding dishCollected toggle filter)
     const baseDishQuery = { ...query };
     delete baseDishQuery.dishCollected;
-    const allFilteredOrdersForDishes = await Delivery.find(baseDishQuery).select('items dishCount dishCollected').lean();
+    if (req.query.dishStatus === 'pending_collection') {
+      delete baseDishQuery.status;
+    }
+    const allFilteredOrdersForDishes = await Delivery.find(baseDishQuery).select('items dishCount dishCollected status').lean();
     
     let totalDishes = 0;
     let pendingDishes = 0;
@@ -662,11 +666,16 @@ const getOrders = async (req, res) => {
 
     allFilteredOrdersForDishes.forEach(o => {
       const cnt = o.dishCount || (o.items && o.items.length > 0 ? o.items.reduce((sum, it) => sum + (it.quantity || 1), 0) : 1);
-      totalDishes += cnt;
-      if (o.dishCollected) {
+      if (o.status === 'delivered') {
+        totalDishes += cnt;
+        if (o.dishCollected) {
+          collectedDishes += cnt;
+        } else {
+          pendingDishes += cnt;
+        }
+      } else if (o.dishCollected) {
         collectedDishes += cnt;
-      } else {
-        pendingDishes += cnt;
+        totalDishes += cnt;
       }
     });
 
@@ -747,6 +756,10 @@ const updateDishStatus = async (req, res) => {
       return res.status(404).json({ message: 'Order delivery record not found.' });
     }
 
+    if (delivery.status !== 'delivered') {
+      return res.status(400).json({ message: 'Cannot mark dishes as collected for an order that has not been delivered yet.' });
+    }
+
     if (dishCollected !== undefined) {
       delivery.dishCollected = Boolean(dishCollected);
       if (delivery.dishCollected) {
@@ -785,13 +798,12 @@ const bulkUpdateDishStatus = async (req, res) => {
   try {
     const { orderIds, dishCollected = true, mealType, status, hostel, startDate, endDate, allMatching = true } = req.body;
 
-    let query = {};
+    let query = { status: 'delivered' };
 
     if (Array.isArray(orderIds) && orderIds.length > 0 && allMatching === false) {
       query._id = { $in: orderIds };
     } else {
       if (mealType) query.timeSlot = mealType;
-      if (status) query.status = status;
       if (hostel) query.location = hostel;
 
       if (startDate || endDate) {
@@ -816,7 +828,7 @@ const bulkUpdateDishStatus = async (req, res) => {
     const result = await Delivery.updateMany(query, { $set: updateData });
 
     res.json({
-      message: `Successfully marked ${result.modifiedCount} order delivery container(s) as ${isCollected ? 'Collected' : 'Pending Return'}.`,
+      message: `Successfully marked ${result.modifiedCount} delivered order container(s) as ${isCollected ? 'Collected' : 'Pending Return'}.`,
       modifiedCount: result.modifiedCount
     });
   } catch (error) {
