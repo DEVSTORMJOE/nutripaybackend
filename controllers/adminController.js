@@ -783,11 +783,11 @@ const updateDishStatus = async (req, res) => {
 // @access  Private (Admin)
 const bulkUpdateDishStatus = async (req, res) => {
   try {
-    const { orderIds, dishCollected = true, mealType, status, hostel, startDate, endDate } = req.body;
+    const { orderIds, dishCollected = true, mealType, status, hostel, startDate, endDate, allMatching = true } = req.body;
 
     let query = {};
 
-    if (Array.isArray(orderIds) && orderIds.length > 0) {
+    if (Array.isArray(orderIds) && orderIds.length > 0 && allMatching === false) {
       query._id = { $in: orderIds };
     } else {
       if (mealType) query.timeSlot = mealType;
