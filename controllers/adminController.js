@@ -397,7 +397,7 @@ const createUser = async (req, res) => {
 // @access  Private (Admin)
 const updateUser = async (req, res) => {
   try {
-    const { name, email, phone, role, isApproved, approvedStatus, password, vendorId } = req.body;
+    const { name, email, phone, role, isApproved, approvedStatus, password, vendorId, hostel, block, floor, room, landmark, university, campus } = req.body;
     const user = await User.findById(req.params.id);
 
     if (!user) {
@@ -463,6 +463,27 @@ const updateUser = async (req, res) => {
       }
     }
     
+    // Student location & profile update logic
+    if (user.role === 'student') {
+      const Student = require('../models/Student');
+      const studentUpdates = {};
+      if (hostel !== undefined) studentUpdates.hostel = hostel;
+      if (block !== undefined) studentUpdates.block = block;
+      if (floor !== undefined) studentUpdates.floor = floor;
+      if (room !== undefined) studentUpdates.room = room;
+      if (landmark !== undefined) studentUpdates.landmark = landmark;
+      if (university !== undefined) studentUpdates.university = university;
+      if (campus !== undefined) studentUpdates.campus = campus;
+
+      if (Object.keys(studentUpdates).length > 0) {
+        await Student.findOneAndUpdate(
+          { user: user._id },
+          { $set: studentUpdates },
+          { upsert: true, new: true }
+        );
+      }
+    }
+
     if (password) {
       user.password = password;
       user.requiresPasswordChange = true;

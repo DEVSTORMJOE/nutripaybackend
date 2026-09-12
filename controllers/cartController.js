@@ -385,6 +385,23 @@ async function checkoutCart(req, res) {
       return res.status(400).json({ message: "Cart is empty" });
     }
 
+    // Enforce profile completion (phone and hostel/location) before daily cart checkout
+    const StudentModel = require('../models/Student');
+    const studentProfileDoc = await StudentModel.findOne({ user: userId });
+    const studentUserDoc = await User.findById(userId);
+    const hasPhoneNum = Boolean(studentUserDoc && studentUserDoc.phone && studentUserDoc.phone.trim().length > 0);
+    const hasHostelOrLoc = Boolean(
+      (studentProfileDoc && studentProfileDoc.hostel && studentProfileDoc.hostel.trim() !== '' && studentProfileDoc.hostel.trim() !== 'Campus') ||
+      (studentProfileDoc && studentProfileDoc.deliveryLocation)
+    );
+
+    if (!studentProfileDoc || !hasPhoneNum || !hasHostelOrLoc) {
+      return res.status(403).json({
+        message: "Please complete your profile details (select hostel location and phone number) before checking out.",
+        requiresProfileCompletion: true
+      });
+    }
+
     // 1. Calculate Subtotal (KES) for daily items
     let subtotalKes = 0;
     for (const date of Object.keys(cart.schedule)) {
@@ -543,6 +560,23 @@ async function addSponsorCheckout(req, res) {
     const hasTemplates = cart?.templates && cart.templates.length > 0;
     if (!cart || (!hasSchedule && !hasTemplates)) {
       return res.status(400).json({ message: "Cart is empty. Please add a plan to your cart before requesting a sponsor." });
+    }
+
+    // Enforce profile completion before sponsor checkout
+    const StudentModel = require('../models/Student');
+    const studentProfileDoc = await StudentModel.findOne({ user: userId });
+    const studentUserDoc = await User.findById(userId);
+    const hasPhoneNum = Boolean(studentUserDoc && studentUserDoc.phone && studentUserDoc.phone.trim().length > 0);
+    const hasHostelOrLoc = Boolean(
+      (studentProfileDoc && studentProfileDoc.hostel && studentProfileDoc.hostel.trim() !== '' && studentProfileDoc.hostel.trim() !== 'Campus') ||
+      (studentProfileDoc && studentProfileDoc.deliveryLocation)
+    );
+
+    if (!studentProfileDoc || !hasPhoneNum || !hasHostelOrLoc) {
+      return res.status(403).json({
+        message: "Please complete your profile details (select hostel location and phone number) before requesting a sponsor.",
+        requiresProfileCompletion: true
+      });
     }
 
     let sponsor = await User.findOne({ email: sponsorEmail });
