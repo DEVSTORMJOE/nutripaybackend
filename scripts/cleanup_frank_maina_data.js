@@ -16,19 +16,36 @@ async function cleanupFrankMainaData() {
 
     const db = mongoose.connection.db;
 
+    // Dynamically find test users by name, phone, or email
+    const usersCol = db.collection('users');
+    const matchingUsers = await usersCol.find({
+      $or: [
+        { name: { $regex: /Frank/i } },
+        { email: { $regex: /mainafrank|brainstormer/i } },
+        { phone: { $regex: /738380692|111949314|769777634|701159155/ } }
+      ]
+    }).toArray();
+
+    const matchedUserIds = matchingUsers.map(u => u._id);
+    const matchedUserStrIds = matchedUserIds.map(id => id.toString());
+
     const rawUserIds = [
       "6a79b841e8a2ed927ba68d90",
       "6a1f2e71d174ed6e7b700b0b",
       "699c3f3cd0ade6ed1a637a7e",
       "6a706b16932e8b6ba67ce09f",
-      "6a835236e4654c68facab48f"
+      "6a835236e4654c68facab48f",
+      ...matchedUserStrIds
     ];
 
-    const objectUserIds = rawUserIds.map(id => {
-      try { return new mongoose.Types.ObjectId(id); } catch(e) { return null; }
-    }).filter(Boolean);
+    const objectUserIds = [
+      ...matchedUserIds,
+      ...rawUserIds.map(id => {
+        try { return new mongoose.Types.ObjectId(id); } catch(e) { return null; }
+      }).filter(Boolean)
+    ];
 
-    const allUserIds = [...rawUserIds, ...objectUserIds];
+    const allUserIds = Array.from(new Set([...rawUserIds, ...objectUserIds]));
 
     const emails = [
       "mainafrank400@gmail.com",
@@ -64,27 +81,32 @@ async function cleanupFrankMainaData() {
       const colName = colInfo.name;
       const collection = db.collection(colName);
 
-      const query = {
-        $or: [
-          { _id: { $in: allUserIds } },
-          { user: { $in: allUserIds } },
-          { userId: { $in: allUserIds } },
-          { student: { $in: allUserIds } },
-          { studentId: { $in: allUserIds } },
-          { toUser: { $in: allUserIds } },
-          { fromUser: { $in: allUserIds } },
-          { sponsor: { $in: allUserIds } },
-          { sponsorId: { $in: allUserIds } },
-          { vendor: { $in: allUserIds } },
-          { approvedBy: { $in: allUserIds } },
-          { email: { $in: emails } },
-          { sponsorEmail: { $in: emails } },
-          { phone: { $in: phones } },
-          { phoneNumber: { $in: phones } },
-          { firebaseUid: { $in: firebaseUids } },
-          { stellarTxHash: { $in: specificTxHashes } }
-        ]
-      };
+      const queryConditions = [
+        { _id: { $in: allUserIds } },
+        { user: { $in: allUserIds } },
+        { userId: { $in: allUserIds } },
+        { student: { $in: allUserIds } },
+        { studentId: { $in: allUserIds } },
+        { toUser: { $in: allUserIds } },
+        { fromUser: { $in: allUserIds } },
+        { sponsor: { $in: allUserIds } },
+        { sponsorId: { $in: allUserIds } },
+        { vendor: { $in: allUserIds } },
+        { approvedBy: { $in: allUserIds } },
+        { email: { $in: emails } },
+        { sponsorEmail: { $in: emails } },
+        { phone: { $in: phones } },
+        { phoneNumber: { $in: phones } },
+        { firebaseUid: { $in: firebaseUids } },
+        { stellarTxHash: { $in: specificTxHashes } }
+      ];
+
+      // Target awaiting_sponsor deliveries as well
+      if (colName === 'deliveries') {
+        queryConditions.push({ status: 'awaiting_sponsor' });
+      }
+
+      const query = { $or: queryConditions };
 
       const matchCount = await collection.countDocuments(query);
 
