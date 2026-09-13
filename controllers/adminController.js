@@ -673,6 +673,26 @@ const getOrders = async (req, res) => {
       query.dishCollected = true;
     }
 
+    // Build meal category set for Main Dishes filtering (excluding drinks, fruits, fast food, etc.)
+    const allMealsForCat = await Meal.find().select('name category').lean();
+    const nonMainDishNames = new Set(
+      allMealsForCat
+        .filter(m => m.category && m.category !== 'main')
+        .map(m => (m.name || '').toLowerCase().trim())
+    );
+
+    const calcMainDishCount = (items) => {
+      if (!Array.isArray(items) || items.length === 0) return 0;
+      let count = 0;
+      items.forEach(it => {
+        const nameLower = (it.name || '').toLowerCase().trim();
+        if (nonMainDishNames.has(nameLower)) return;
+        if (nameLower.includes('drink') || nameLower.includes('soda') || nameLower.includes('water') || nameLower.includes('fruit') || nameLower.includes('tea') || nameLower.includes('juice')) return;
+        count += Number(it.quantity || 1);
+      });
+      return count;
+    };
+
     // Calculate aggregated dish metrics based on current filters (excluding dishCollected toggle filter)
     const baseDishQuery = { ...query };
     delete baseDishQuery.dishCollected;
@@ -686,17 +706,19 @@ const getOrders = async (req, res) => {
     let collectedDishes = 0;
 
     allFilteredOrdersForDishes.forEach(o => {
-      const cnt = o.dishCount || (o.items && o.items.length > 0 ? o.items.reduce((sum, it) => sum + (it.quantity || 1), 0) : 1);
-      if (o.status === 'delivered') {
-        totalDishes += cnt;
-        if (o.dishCollected) {
+      const cnt = calcMainDishCount(o.items);
+      if (cnt > 0) {
+        if (o.status === 'delivered') {
+          totalDishes += cnt;
+          if (o.dishCollected) {
+            collectedDishes += cnt;
+          } else {
+            pendingDishes += cnt;
+          }
+        } else if (o.dishCollected) {
           collectedDishes += cnt;
-        } else {
-          pendingDishes += cnt;
+          totalDishes += cnt;
         }
-      } else if (o.dishCollected) {
-        collectedDishes += cnt;
-        totalDishes += cnt;
       }
     });
 
@@ -727,7 +749,7 @@ const getOrders = async (req, res) => {
 
     const enrichedOrders = orders.map(order => {
       const sData = order.student?._id ? studentMap[order.student._id.toString()] : null;
-      const computedDishCount = order.dishCount || (order.items && order.items.length > 0 ? order.items.reduce((sum, it) => sum + (it.quantity || 1), 0) : 1);
+      const computedDishCount = calcMainDishCount(order.items);
       return {
         ...order,
         dishCount: computedDishCount,
