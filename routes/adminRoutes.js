@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { getDashboard, approveMeal, getUsers, getPendingApprovals, approveVendor, getVendors, getWallets, updateWalletStatus, getTransactions, createUser, updateUser, createVendor, getMeals, updateMealApproval, getOrders, updateDishStatus, bulkUpdateDishStatus, assignDriverToOrder, overrideDeliveryOrder, getDeliveryStaff, approveDelivery, getWeeklyPlans, updateWeeklyPlan, resetWeeklyPlan, getWithdrawalRequests, handleWithdrawalRequest, assignLocationsToDriver, getRefundRequests, handleRefundApproval, getErrorLogs, resolveErrorLog } = require('../controllers/adminController');
+const { getDashboard, approveMeal, getUsers, getPendingApprovals, approveVendor, getVendors, getWallets, updateWalletStatus, getTransactions, createUser, updateUser, createVendor, getMeals, updateMealApproval, getOrders, updateDishStatus, bulkUpdateDishStatus, assignDriverToOrder, overrideDeliveryOrder, getDeliveryStaff, approveDelivery, getWeeklyPlans, updateWeeklyPlan, resetWeeklyPlan, getWithdrawalRequests, handleWithdrawalRequest, assignLocationsToDriver, getRefundRequests, handleRefundApproval, getErrorLogs, resolveErrorLog, getMealOrderStats } = require('../controllers/adminController');
 const { protect } = require('../middleware/authMiddleware');
 const { role } = require('../middleware/roleMiddleware');
 
@@ -17,6 +17,7 @@ router.get('/pending', protect, role('admin'), getPendingApprovals);
 router.post('/approve/meal', protect, role('admin'), approveMeal);
 router.post('/approve/vendor', protect, role('admin'), approveVendor);
 router.get('/meals', protect, role('admin'), getMeals);
+router.get('/meal-order-stats', protect, role('admin'), getMealOrderStats);
 router.patch('/meals/:id/approval', protect, role('admin'), updateMealApproval);
 router.get('/orders', protect, role('admin'), getOrders);
 router.put('/orders/bulk-dish-status', protect, role('admin'), bulkUpdateDishStatus);

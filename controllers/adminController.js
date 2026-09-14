@@ -1818,6 +1818,129 @@ const resolveErrorLog = async (req, res) => {
     res.status(500).json({ message: "Failed to resolve error log." });
   }
 };
+// @desc    Get Meal Order Statistics (for Admin statistics page)
+// @route   GET /api/admin/meal-order-stats
+// @access  Private (Admin)
+const getMealOrderStats = async (req, res) => {
+  try {
+    const Delivery = require('../models/Delivery');
+    const Meal = require('../models/Meal');
+
+    // 1. Fetch all meals to build lookup map
+    const meals = await Meal.find().populate({
+      path: 'vendor',
+      populate: { path: 'user', select: 'name email companyName' }
+    }).lean();
+
+    const mealMap = {};
+    meals.forEach(m => {
+      if (m.name) {
+        mealMap[m.name.toLowerCase().trim()] = m;
+      }
+    });
+
+    // 2. Fetch all orders
+    const deliveries = await Delivery.find().lean();
+
+    let totalOrders = deliveries.length;
+    let totalMealsSold = 0;
+    let totalRevenue = 0;
+
+    const statsMap = {};
+    const categoryMap = { main: 0, drinks: 0, fruits: 0, breakfast: 0, snacks: 0, other: 0 };
+    const timeSlotMap = { breakfast: 0, lunch: 0, supper: 0 };
+
+    deliveries.forEach(d => {
+      const timeSlot = (d.timeSlot || 'lunch').toLowerCase();
+      if (timeSlotMap[timeSlot] !== undefined) {
+        timeSlotMap[timeSlot] += 1;
+      }
+
+      if (Array.isArray(d.items) && d.items.length > 0) {
+        d.items.forEach(item => {
+          const rawName = item.name || item.mealName || 'Unknown Meal';
+          const cleanName = rawName.trim();
+          const key = cleanName.toLowerCase();
+
+          const qty = Number(item.quantity || item.qty || 1);
+          const price = Number(item.price || (mealMap[key]?.price) || 0);
+          const rev = qty * price;
+
+          totalMealsSold += qty;
+          totalRevenue += rev;
+
+          const matchedMeal = mealMap[key];
+          const category = (matchedMeal?.category || 'main').toLowerCase();
+
+          if (categoryMap[category] !== undefined) {
+            categoryMap[category] += qty;
+          } else {
+            categoryMap.other += qty;
+          }
+
+          if (!statsMap[key]) {
+            statsMap[key] = {
+              mealId: matchedMeal?._id || null,
+              name: cleanName,
+              category: matchedMeal?.category || 'Main Meal',
+              vendorName: matchedMeal?.vendor?.user?.name || matchedMeal?.vendor?.companyName || 'Nutri Kitchen',
+              imageUrl: matchedMeal?.imageUrl || item.imageUrl || '',
+              price: price,
+              totalOrders: 0,
+              totalQuantity: 0,
+              totalRevenue: 0
+            };
+          }
+
+          statsMap[key].totalOrders += 1;
+          statsMap[key].totalQuantity += qty;
+          statsMap[key].totalRevenue += rev;
+        });
+      }
+    });
+
+    // Also include meals with 0 orders
+    meals.forEach(m => {
+      if (!m.name) return;
+      const key = m.name.toLowerCase().trim();
+      if (!statsMap[key]) {
+        statsMap[key] = {
+          mealId: m._id,
+          name: m.name,
+          category: m.category || 'Main Meal',
+          vendorName: m.vendor?.user?.name || m.vendor?.companyName || 'Nutri Kitchen',
+          imageUrl: m.imageUrl || '',
+          price: Number(m.price || 0),
+          totalOrders: 0,
+          totalQuantity: 0,
+          totalRevenue: 0
+        };
+      }
+    });
+
+    const rankings = Object.values(statsMap).sort((a, b) => {
+      if (b.totalQuantity !== a.totalQuantity) {
+        return b.totalQuantity - a.totalQuantity;
+      }
+      return b.totalRevenue - a.totalRevenue;
+    });
+
+    res.json({
+      overview: {
+        totalOrders,
+        totalMealsSold,
+        totalRevenue,
+        activeMealsCount: meals.length
+      },
+      categoryDistribution: categoryMap,
+      timeSlotDistribution: timeSlotMap,
+      rankings
+    });
+  } catch (error) {
+    console.error("Meal Order Stats Error:", error);
+    res.status(500).json({ message: "Failed to compute meal order statistics: " + error.message });
+  }
+};
 
 module.exports = {
   getDashboard,
@@ -1854,5 +1977,6 @@ module.exports = {
   handleRefundApproval,
   getErrorLogs,
   resolveErrorLog,
-  updateWalletStatus
+  updateWalletStatus,
+  getMealOrderStats
 };
