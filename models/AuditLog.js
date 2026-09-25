@@ -8,7 +8,9 @@ const auditLogSchema = new mongoose.Schema({
       'commission_change',
       'refund_approval',
       'manual_adjustment',
-      'sponsor_funding'
+      'sponsor_funding',
+      'loyalty_anomaly',
+      'loyalty_reversion'
     ],
     required: true
   },

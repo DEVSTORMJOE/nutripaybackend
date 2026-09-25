@@ -99,6 +99,21 @@ const userSchema = new mongoose.Schema(
       type: Date,
       default: null,
     },
+    loyaltyPoints: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    totalLoyaltyPointsEarned: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    totalLoyaltyPointsConverted: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
   },
   { timestamps: true }
 );

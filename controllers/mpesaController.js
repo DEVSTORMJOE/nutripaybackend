@@ -279,6 +279,18 @@ const mpesaCallback = async (req, res) => {
                     session
                 );
 
+                // Award Loyalty Points for M-Pesa Order >= 100 KES
+                try {
+                  const loyaltyService = require('../services/loyaltyService');
+                  await loyaltyService.awardPoints({
+                    userId: customOrder.user,
+                    orderId: customOrder._id,
+                    orderAmountKES: amountPaid
+                  });
+                } catch (loyaltyErr) {
+                  console.warn("[mpesaCallback] Loyalty points award error (ignored):", loyaltyErr.message);
+                }
+
                 // Dispatch SMS notification to Student and Admin on successful PayHero payment
                 try {
                   const User = require('../models/User');

@@ -33,7 +33,8 @@ const transactionSchema = new mongoose.Schema({
       'mpesa_direct_order',
       'funding',
       'ndash_payment',
-      'ndash_payout'
+      'ndash_payout',
+      'loyalty_reward'
     ],
     required: true
   },

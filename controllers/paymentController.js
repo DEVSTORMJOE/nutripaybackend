@@ -151,6 +151,18 @@ const createCustomOrder = async (req, res) => {
         deliveryNote: deliveryNote || ""
       });
 
+      // Award Loyalty Points for order >= 100 KES
+      try {
+        const loyaltyService = require('../services/loyaltyService');
+        await loyaltyService.awardPoints({
+          userId: user._id,
+          orderId: customOrder._id,
+          orderAmountKES: totalCost
+        });
+      } catch (loyaltyErr) {
+        console.warn("[PaymentController] Loyalty points award error (ignored):", loyaltyErr.message);
+      }
+
       // Inherit student hostel DeliveryLocation and create immediate Delivery record
       const Student = require('../models/Student');
       const DeliveryLocation = require('../models/DeliveryLocation');

@@ -32,3 +32,4 @@
 {"adminId":"6a7d74a825cca87844caa7c4","timestamp":"2026-08-13T07:39:20.110Z","ip":"127.0.0.1","refundRequestId":"6a7d74a825cca87844caa7c2","amountKES":{"$numberDecimal":"1000"},"studentId":"6a7d74a725cca87844caa7b5","action":"approved"}
 {"adminId":"6a7d74dfd6763f1b203626d9","timestamp":"2026-08-13T07:40:15.104Z","ip":"127.0.0.1","refundRequestId":"6a7d74dfd6763f1b203626d7","amountKES":{"$numberDecimal":"1000"},"studentId":"6a7d74ded6763f1b203626ca","action":"approved"}
 {"adminId":"6a7d759e61e8f2ccb9985399","timestamp":"2026-08-13T07:43:26.089Z","ip":"127.0.0.1","refundRequestId":"6a7d759e61e8f2ccb9985397","amountKES":{"$numberDecimal":"1000"},"studentId":"6a7d759d61e8f2ccb998538a","action":"approved"}
+{"adminId":"69930543764a6fc3ce1a89a8","adminEmail":"admin@example.com","timestamp":"2026-09-25T03:48:16.569Z","ip":"::1","refundRequestId":"6ab5ee970048982f9951cebc","amountKES":"3750.00","studentId":"69a051f65a4549d111c4b950","action":"approved"}

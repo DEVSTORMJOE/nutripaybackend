@@ -350,9 +350,21 @@ async function checkoutCart(req, res) {
         }
       }
 
-      // 4. Clear Cart
+      // Clear Cart
       const CartModel = require('../models/Cart');
       await CartModel.findOneAndUpdate({ user: userId }, { templates: [], schedule: {} });
+
+      // Award Loyalty Points for Subscription Plan >= 100 KES
+      try {
+        const loyaltyService = require('../services/loyaltyService');
+        await loyaltyService.awardPoints({
+          userId: userId,
+          orderId: subscription._id,
+          orderAmountKES: subtotalKes
+        });
+      } catch (loyaltyErr) {
+        console.warn("[cartController] Subscription loyalty points award error (ignored):", loyaltyErr.message);
+      }
 
       // Dispatch SMS to Student and Admin
       try {
@@ -532,6 +544,18 @@ async function checkoutCart(req, res) {
 
     // 5. Clear Cart
     await Cart.findOneAndUpdate({ user: userId }, { schedule: {} });
+
+    // Award Loyalty Points for Daily Scheduled Cart Checkout >= 100 KES
+    try {
+      const loyaltyService = require('../services/loyaltyService');
+      await loyaltyService.awardPoints({
+        userId: userId,
+        orderId: null,
+        orderAmountKES: subtotalKes
+      });
+    } catch (loyaltyErr) {
+      console.warn("[cartController] Daily cart loyalty points award error (ignored):", loyaltyErr.message);
+    }
 
     return res.json({
       ok: true,

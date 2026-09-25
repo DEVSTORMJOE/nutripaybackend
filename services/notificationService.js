@@ -1,3 +1,7 @@
+const { sendMail } = require('../utils/mailer');
+
+/* ----------------------------- Legacy Nodemailer Setup (Commented Out) ----------------------------- */
+/*
 const nodemailer = require('nodemailer');
 
 // Configure transporter (Mock for now, or use Ethereal/Gmail if env vars exist)
@@ -10,18 +14,18 @@ const transporter = nodemailer.createTransport({
     pass: process.env.EMAIL_PASS || 'test'
   }
 });
+*/
 
 const sendEmail = async (to, subject, text) => {
   try {
-    const info = await transporter.sendMail({
-      from: '"NutriPay System" <noreply@nutripay.com>',
-      to: to,
-      subject: subject,
-      text: text
+    const res = await sendMail({
+      to,
+      subject,
+      text,
     });
-    console.log("Message sent: %s", info.messageId);
+    console.log("[NotificationService] Email dispatched via Brevo API:", res.id);
   } catch (error) {
-    console.error("Error sending email:", error);
+    console.error("[NotificationService] Error sending email:", error.message || error);
   }
 };
 
@@ -35,5 +39,6 @@ const sendPaymentSuccess = async (email, amount, purpose) => {
 
 module.exports = {
   sendSponsorRequest,
-  sendPaymentSuccess
+  sendPaymentSuccess,
+  sendEmail
 };

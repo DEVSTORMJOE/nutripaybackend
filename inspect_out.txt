@@ -1,0 +1,55 @@
+Database connected.
+=== USERS LOYALTY SUMMARY ===
+User: user4@gmail.com (Vanidiah) - ID: 69a051f65a4549d111c4b950
+  Points: 17, Total Earned: 121, Converted: 104, Logs: 36
+    - [earned] 1 pts | KES 150 | Earned 1 loyalty point(s) for order of KES 150 | Fri Sep 25 2026 06:49:30 GMT+0300 (East Africa Time)
+    - [earned] 5 pts | KES 650 | Earned 5 loyalty point(s) for order of KES 650 | Fri Sep 25 2026 06:41:56 GMT+0300 (East Africa Time)
+    - [earned] 5 pts | KES 500 | Earned 5 loyalty point(s) for order of KES 500 | Fri Sep 25 2026 06:40:33 GMT+0300 (East Africa Time)
+    - [earned] 1 pts | KES 150 | Earned 1 loyalty point(s) for order of KES 150 | Fri Sep 25 2026 06:29:01 GMT+0300 (East Africa Time)
+    - [earned] 5 pts | KES 550 | Earned 5 loyalty point(s) for order of KES 550 | Fri Sep 25 2026 06:21:19 GMT+0300 (East Africa Time)
+    - [converted_to_wallet] -104 pts | KES 0 | Converted 104 loyalty points to KES 104 active wallet credit. | Fri Sep 25 2026 06:12:38 GMT+0300 (East Africa Time)
+    - [earned] 5 pts | KES 2040 | Earned 5 loyalty point(s) for order of KES 2040 | Fri Sep 25 2026 06:12:30 GMT+0300 (East Africa Time)
+    - [earned] 5 pts | KES 4050 | Earned 5 loyalty point(s) for order of KES 4050 | Fri Sep 25 2026 06:12:30 GMT+0300 (East Africa Time)
+    - [earned] 5 pts | KES 14590 | Earned 5 loyalty point(s) for order of KES 14590 | Fri Sep 25 2026 06:12:30 GMT+0300 (East Africa Time)
+    - [earned] 2 pts | KES 200 | Earned 2 loyalty point(s) for order of KES 200 | Fri Sep 25 2026 06:12:30 GMT+0300 (East Africa Time)
+User: pen_student@nutripay.local (PenTest Student Alpha) - ID: 6a72f0d23e62bf31ff920696
+  Points: 11, Total Earned: 11, Converted: 0, Logs: 3
+    - [earned] 5 pts | KES 3500 | Earned 5 loyalty point(s) for order of KES 3500 | Fri Sep 25 2026 06:12:39 GMT+0300 (East Africa Time)
+    - [earned] 5 pts | KES 1000 | Earned 5 loyalty point(s) for order of KES 1000 | Fri Sep 25 2026 06:12:39 GMT+0300 (East Africa Time)
+    - [earned] 1 pts | KES 180 | Earned 1 loyalty point(s) for order of KES 180 | Fri Sep 25 2026 06:12:39 GMT+0300 (East Africa Time)
+User: loyalty_test_1790297158490@example.com (Loyalty Test User) - ID: 6ab5c4464fa10ff025a23169
+  Points: 5, Total Earned: 105, Converted: 100, Logs: 22
+    - [earned] 5 pts | KES 500 | Earned 5 loyalty point(s) for order of KES 500 | Fri Sep 25 2026 03:46:12 GMT+0300 (East Africa Time)
+    - [converted_to_wallet] -100 pts | KES 0 | Converted 100 loyalty points to KES 100 active wallet credit. | Fri Sep 25 2026 03:46:12 GMT+0300 (East Africa Time)
+    - [earned] 5 pts | KES 500 | Earned 5 loyalty point(s) for order of KES 500 | Fri Sep 25 2026 03:45:58 GMT+0300 (East Africa Time)
+    - [earned] 5 pts | KES 500 | Earned 5 loyalty point(s) for order of KES 500 | Fri Sep 25 2026 03:45:58 GMT+0300 (East Africa Time)
+    - [earned] 5 pts | KES 500 | Earned 5 loyalty point(s) for order of KES 500 | Fri Sep 25 2026 03:45:58 GMT+0300 (East Africa Time)
+    - [earned] 5 pts | KES 500 | Earned 5 loyalty point(s) for order of KES 500 | Fri Sep 25 2026 03:45:58 GMT+0300 (East Africa Time)
+    - [earned] 5 pts | KES 500 | Earned 5 loyalty point(s) for order of KES 500 | Fri Sep 25 2026 03:45:58 GMT+0300 (East Africa Time)
+    - [earned] 5 pts | KES 500 | Earned 5 loyalty point(s) for order of KES 500 | Fri Sep 25 2026 03:45:58 GMT+0300 (East Africa Time)
+    - [earned] 5 pts | KES 500 | Earned 5 loyalty point(s) for order of KES 500 | Fri Sep 25 2026 03:45:58 GMT+0300 (East Africa Time)
+    - [earned] 5 pts | KES 500 | Earned 5 loyalty point(s) for order of KES 500 | Fri Sep 25 2026 03:45:58 GMT+0300 (East Africa Time)
+
+=== RECENT CUSTOM ORDERS ===
+Order: ORD-1790308170026-5233 | User: 69a051f65a4549d111c4b950 | KES 150 | Status: preparing | PayMethod: wallet | Date: Fri Sep 25 2026 06:49:30 GMT+0300 (East Africa Time)
+Order: ORD-1790307716097-6908 | User: 69a051f65a4549d111c4b950 | KES 650 | Status: preparing | PayMethod: wallet | Date: Fri Sep 25 2026 06:41:56 GMT+0300 (East Africa Time)
+Order: ORD-1790307633491-5576 | User: 69a051f65a4549d111c4b950 | KES 500 | Status: preparing | PayMethod: wallet | Date: Fri Sep 25 2026 06:40:33 GMT+0300 (East Africa Time)
+Order: ORD-1790306940926-3719 | User: 69a051f65a4549d111c4b950 | KES 150 | Status: preparing | PayMethod: wallet | Date: Fri Sep 25 2026 06:29:00 GMT+0300 (East Africa Time)
+Order: ORD-1790306583308-6328 | User: 69a051f65a4549d111c4b950 | KES 550 | Status: failed | PayMethod: mpesa_direct | Date: Fri Sep 25 2026 06:23:03 GMT+0300 (East Africa Time)
+Order: ORD-1790306478995-7345 | User: 69a051f65a4549d111c4b950 | KES 550 | Status: preparing | PayMethod: wallet | Date: Fri Sep 25 2026 06:21:19 GMT+0300 (East Africa Time)
+Order: ORD-1790305673472-6752 | User: 69a051f65a4549d111c4b950 | KES 300 | Status: preparing | PayMethod: wallet | Date: Fri Sep 25 2026 06:07:53 GMT+0300 (East Africa Time)
+Order: ORD-1790305269925-5739 | User: 69a051f65a4549d111c4b950 | KES 150 | Status: preparing | PayMethod: wallet | Date: Fri Sep 25 2026 06:01:10 GMT+0300 (East Africa Time)
+Order: ORD-1790300609091-5303 | User: 69a051f65a4549d111c4b950 | KES 300 | Status: preparing | PayMethod: wallet | Date: Fri Sep 25 2026 04:43:29 GMT+0300 (East Africa Time)
+Order: ORD-1790298623697-9446 | User: 69a051f65a4549d111c4b950 | KES 150 | Status: preparing | PayMethod: wallet | Date: Fri Sep 25 2026 04:10:23 GMT+0300 (East Africa Time)
+
+=== RECENT TRANSACTIONS ===
+Tx: 93337321-7253-4a76-865d-9a097d300a52 | From: 69a051f65a4549d111c4b950 | To: 6a1f2eea3287ccafd985dc37 | KES 150.00 | Cat: custom_order | Status: completed | Date: Fri Sep 25 2026 06:49:30 GMT+0300 (East Africa Time)
+Tx: 1444cb46-0a7c-44c8-80de-bf4e90647dc7 | From: 69a051f65a4549d111c4b950 | To: 69a051f65a4549d111c4b950 | KES 3750 | Cat: refund | Status: completed | Date: Fri Sep 25 2026 06:48:16 GMT+0300 (East Africa Time)
+Tx: 6a85d53d-1543-4da0-9524-4ac6e8c6c6f1 | From: 69a051f65a4549d111c4b950 | To: 6a72f0d23e62bf31ff9206a2 | KES 650.00 | Cat: custom_order | Status: completed | Date: Fri Sep 25 2026 06:41:56 GMT+0300 (East Africa Time)
+Tx: a1032a7b-eed6-4c21-a453-33ffe01dd59e | From: 69a051f65a4549d111c4b950 | To: 6a72f0d23e62bf31ff9206a2 | KES 500.00 | Cat: custom_order | Status: completed | Date: Fri Sep 25 2026 06:40:33 GMT+0300 (East Africa Time)
+Tx: 970fa561-5f31-495c-94aa-8cfda40ecec5 | From: 69a051f65a4549d111c4b950 | To: 6a1f2eea3287ccafd985dc37 | KES 150.00 | Cat: custom_order | Status: completed | Date: Fri Sep 25 2026 06:29:00 GMT+0300 (East Africa Time)
+Tx: bfe16894-9207-4d76-aaf0-c2717a69a071 | From: 69a051f65a4549d111c4b950 | To: 6a15a0b8bbca6cb25c317341 | KES 550.00 | Cat: custom_order | Status: completed | Date: Fri Sep 25 2026 06:21:19 GMT+0300 (East Africa Time)
+Tx: LOYALTY-REWARD-1790305957363-780 | From: undefined | To: 69a051f65a4549d111c4b950 | KES 104.00 | Cat: loyalty_reward | Status: completed | Date: Fri Sep 25 2026 06:12:37 GMT+0300 (East Africa Time)
+Tx: 8abdb71b-e6ae-40eb-a76b-75a24d585889 | From: 69a051f65a4549d111c4b950 | To: 6a15a0b8bbca6cb25c317341 | KES 300.00 | Cat: custom_order | Status: completed | Date: Fri Sep 25 2026 06:07:53 GMT+0300 (East Africa Time)
+Tx: f0592a19-4b8b-44f1-bfac-5e65eb2dbafd | From: 69a051f65a4549d111c4b950 | To: 6a1b5217943956a4158a47ea | KES 150.00 | Cat: custom_order | Status: completed | Date: Fri Sep 25 2026 06:01:09 GMT+0300 (East Africa Time)
+Tx: 105c0c9b-57aa-4b27-8940-2a7527106e11 | From: 69a051f65a4549d111c4b950 | To: 6a1f2eea3287ccafd985dc37 | KES 300.00 | Cat: custom_order | Status: completed | Date: Fri Sep 25 2026 04:43:29 GMT+0300 (East Africa Time)

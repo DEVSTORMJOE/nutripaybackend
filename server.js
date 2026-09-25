@@ -184,6 +184,7 @@ app.use("/api/faqs", require("./routes/faqRoutes"));
 app.use("/api/admin/audit", require("./routes/auditRoutes"));
 app.use("/api/admin/health", require("./routes/healthRoutes"));
 app.use("/api/ambassadors", require("./routes/ambassadorRoutes"));
+app.use("/api/loyalty", require("./routes/loyaltyRoutes"));
 /* =========================
    BASIC ROUTE
    ========================= */

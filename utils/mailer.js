@@ -1,63 +1,11 @@
-// // server/utils/mailer.js
-// const nodemailer = require("nodemailer");
-
-// function must(name) {
-//   const v = process.env[name];
-//   if (!v) throw new Error(`${name} missing in .env`);
-//   return v;
-// }
-
-// const transport = nodemailer.createTransport({
-//   host: must("SMTP_HOST"),
-//   port: Number(process.env.SMTP_PORT || 587),
-//   secure: String(process.env.SMTP_SECURE || "false") === "true",
-//   auth: {
-//     user: must("SMTP_USER"),
-//     pass: must("SMTP_PASS"),
-//   },
-// });
-
-// async function sendMail({ to, subject, text, html, headers }) {
-//   const from =
-//     process.env.MAIL_FROM ||
-//     process.env.NEWSLETTER_BRAND_EMAIL ||
-//     "no-reply@nutripay.com";
-
-//   return transport.sendMail({
-//     from,
-//     to,
-//     subject,
-//     text,
-//     html,
-//     headers,
-//   });
-// }
-
-// module.exports = { sendMail };
-
-
-
-
-
-
-
-
-
-
-
-
-
 // server/utils/mailer.js
-// - Works with ANY SMTP provider via .env (including Gmail app password)
-// - Loads .env safely (no double-loading issues)
-// - Verifies transporter once (optional, controlled by env)
-// - Normalizes common env naming patterns: SMTP_* and/or GMAIL_*
-// - Provides strong runtime logs (no password leakage)
+// Modern Brevo Native API Integration (@getbrevo/brevo SDK)
+// Preserving legacy Nodemailer + Google App Password configuration below in comments.
 
 require("dotenv").config();
-const nodemailer = require("nodemailer");
+const { BrevoClient } = require("@getbrevo/brevo");
 
-/* ----------------------------- helpers ----------------------------- */
+/* ----------------------------- Helpers ----------------------------- */
 
 function env(name, fallback = "") {
   const v = process.env[name];
@@ -70,6 +18,145 @@ function boolEnv(name, fallback = false) {
   return ["1", "true", "yes", "on"].includes(v.toLowerCase());
 }
 
+function escapeHtml(s = "") {
+  return String(s)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
+
+/**
+ * Parse string like "NutriPay <no-reply@nutripay.com>" or "no-reply@nutripay.com"
+ * into `{ name, email }` object required by Brevo API.
+ */
+function parseSender(fromStr) {
+  const defaultSender = { name: "NutriPay", email: "no-reply@nutripay.com" };
+  if (!fromStr) return defaultSender;
+
+  const match = fromStr.match(/^(?:"?([^"]*)"?\s)?<([^>]+)>$/);
+  if (match) {
+    return {
+      name: match[1] ? match[1].trim() : "NutriPay",
+      email: match[2].trim(),
+    };
+  }
+  if (fromStr.includes("@")) {
+    return { name: "NutriPay", email: fromStr.trim() };
+  }
+  return defaultSender;
+}
+
+/**
+ * Parse recipient input into Brevo's array of recipient objects `[{ email, name }]`
+ */
+function parseRecipients(to) {
+  if (!to) return [];
+  if (Array.isArray(to)) {
+    return to.map((item) => {
+      if (typeof item === "string") return parseSender(item);
+      if (item && item.email) return { email: item.email, name: item.name };
+      return item;
+    });
+  }
+  if (typeof to === "string") {
+    return to.split(",").map((s) => parseSender(s.trim()));
+  }
+  if (to && to.email) {
+    return [{ email: to.email, name: to.name }];
+  }
+  return [];
+}
+
+/* ----------------------------- Config ----------------------------- */
+
+const NODE_ENV = env("NODE_ENV", "development");
+const IS_PROD = NODE_ENV === "production";
+const DEBUG_MAILER = boolEnv("MAILER_DEBUG", !IS_PROD);
+
+const BREVO_API_KEY =
+  env("BREVO_API_KEY") || env("SIB_API_KEY") || env("BREVO_KEY");
+
+const MAIL_FROM =
+  env("MAIL_FROM") ||
+  env("SMTP_FROM") ||
+  (env("SMTP_USER")
+    ? `NutriPay <${env("SMTP_USER")}>`
+    : "NutriPay <no-reply@nutripay.com>");
+
+if (DEBUG_MAILER) {
+  console.log("[MAILER] Brevo SDK Boot", {
+    NODE_ENV,
+    HAS_BREVO_KEY: !!BREVO_API_KEY,
+    MAIL_FROM,
+  });
+}
+
+// Lazy/Cached Brevo Client Instance
+let brevoClientInstance = null;
+
+function getBrevoClient() {
+  if (!brevoClientInstance) {
+    if (!BREVO_API_KEY) {
+      console.warn(
+        "[MAILER] BREVO_API_KEY missing in .env. Set BREVO_API_KEY to send emails via Brevo API."
+      );
+    }
+    brevoClientInstance = new BrevoClient({
+      apiKey: BREVO_API_KEY || "missing-api-key",
+    });
+  }
+  return brevoClientInstance;
+}
+
+/* ----------------------------- Brevo API Engine ----------------------------- */
+
+/**
+ * Send transactional email using the modern Brevo SDK (`@getbrevo/brevo`)
+ */
+async function sendMail({ to, subject, html, text, headers, attachments } = {}) {
+  if (!to) throw new Error("sendMail: 'to' is required");
+  if (!subject) throw new Error("sendMail: 'subject' is required");
+
+  try {
+    const client = getBrevoClient();
+    const sender = parseSender(MAIL_FROM);
+    const recipients = parseRecipients(to);
+
+    const payload = {
+      sender,
+      to: recipients,
+      subject,
+      htmlContent:
+        html || (text ? `<pre style="white-space:pre-wrap;">${escapeHtml(text)}</pre>` : " "),
+      textContent: text || "",
+    };
+
+    if (headers) payload.headers = headers;
+    if (attachments && Array.isArray(attachments) && attachments.length > 0) {
+      payload.attachment = attachments;
+    }
+
+    const result = await client.transactionalEmails.sendTransacEmail(payload);
+
+    if (DEBUG_MAILER) {
+      console.log("[MAILER] Sent via Brevo API", {
+        messageId: result.messageId || result.messageIds,
+      });
+    }
+
+    return { ok: true, id: result.messageId || result.messageIds || "sent" };
+  } catch (e) {
+    console.error("[MAILER] Brevo API send failed:", e.message || e);
+    throw e;
+  }
+}
+
+/* ----------------------------- Legacy Nodemailer Setup (Commented Out) ----------------------------- */
+/*
+const nodemailer = require("nodemailer");
+
 function numEnv(name, fallback) {
   const v = env(name);
   const n = Number(v);
@@ -77,38 +164,12 @@ function numEnv(name, fallback) {
 }
 
 function normalizeGmailAppPassword(pw) {
-  // Gmail app passwords are often copied with spaces: "abcd efgh ijkl mnop"
   return String(pw || "").trim().replace(/\s+/g, "");
 }
 
-/* ----------------------------- config ----------------------------- */
-/**
- * Supported env patterns:
- *
- * Generic SMTP (recommended):
- *   SMTP_HOST=smtp.provider.com
- *   SMTP_PORT=587
- *   SMTP_SECURE=false
- *   SMTP_USER=...
- *   SMTP_PASS=...
- *   MAIL_FROM="NutriPay <no-reply@nutripay.com>"
- *
- * Gmail (optional convenience):
- *   GMAIL_USER=your@gmail.com
- *   GMAIL_APP_PASSWORD=16charAppPassword (can include spaces)
- *   SMTP_FROM="NutriPay <your@gmail.com>"
- */
-
-const NODE_ENV = env("NODE_ENV", "development");
-const IS_PROD = NODE_ENV === "production";
-const DEBUG_MAILER = boolEnv("MAILER_DEBUG", !IS_PROD);
-const VERIFY_ON_BOOT = boolEnv("MAILER_VERIFY_ON_BOOT", false);
-
-// Prefer explicit SMTP_*, else fallback to Gmail envs
 const SMTP_HOST =
   env("SMTP_HOST") || (env("GMAIL_USER") ? "smtp.gmail.com" : "");
 const SMTP_PORT = numEnv("SMTP_PORT", SMTP_HOST === "smtp.gmail.com" ? 465 : 587);
-
 const SMTP_USER = env("SMTP_USER") || env("GMAIL_USER");
 const SMTP_PASS = env("SMTP_PASS") || normalizeGmailAppPassword(env("GMAIL_APP_PASSWORD"));
 
@@ -119,49 +180,7 @@ const SMTP_SECURE =
     ? true
     : SMTP_PORT === 465;
 
-const MAIL_FROM =
-  env("MAIL_FROM") ||
-  env("SMTP_FROM") ||
-  (SMTP_USER ? `NutriPay <${SMTP_USER}>` : "NutriPay <no-reply@nutripay.com>");
-
-// Optional TLS controls
 const TLS_REJECT_UNAUTHORIZED = boolEnv("SMTP_TLS_REJECT_UNAUTHORIZED", IS_PROD);
-
-// Basic validation (no secrets printed)
-if (!SMTP_HOST) {
-  throw new Error("SMTP_HOST is missing. Set SMTP_HOST or provide GMAIL_USER to auto-use Gmail.");
-}
-if (!SMTP_USER) {
-  throw new Error("SMTP_USER is missing. Set SMTP_USER or GMAIL_USER.");
-}
-if (!SMTP_PASS) {
-  throw new Error("SMTP_PASS is missing. Set SMTP_PASS or GMAIL_APP_PASSWORD.");
-}
-
-// Special check for Gmail app password shape (not mandatory but helpful)
-if (SMTP_HOST === "smtp.gmail.com") {
-  const pwLen = SMTP_PASS.length;
-  // Gmail app password is typically 16 chars (no spaces). Some providers differ.
-  if (pwLen !== 16 && DEBUG_MAILER) {
-    console.warn("[MAILER] Gmail password length is not 16 after normalization:", pwLen);
-  }
-}
-
-if (DEBUG_MAILER) {
-  console.log("[MAILER] Boot", {
-    NODE_ENV,
-    SMTP_HOST,
-    SMTP_PORT,
-    SMTP_SECURE,
-    SMTP_USER,
-    PASS_LEN: SMTP_PASS.length,
-    MAIL_FROM,
-    TLS_REJECT_UNAUTHORIZED,
-    CWD: process.cwd(),
-  });
-}
-
-/* ----------------------------- transporter ----------------------------- */
 
 const transport = nodemailer.createTransport({
   host: SMTP_HOST,
@@ -174,54 +193,20 @@ const transport = nodemailer.createTransport({
   },
 });
 
-// Optional verification on boot
-if (VERIFY_ON_BOOT) {
-  transport
-    .verify()
-    .then(() => console.log("[MAILER] Transport verified"))
-    .catch((e) => console.error("[MAILER] Transport verify failed:", e.message));
+async function legacySendMail({ to, subject, html, text, headers, attachments } = {}) {
+  return transport.sendMail({
+    from: MAIL_FROM,
+    to,
+    subject,
+    html,
+    text,
+    headers,
+    attachments,
+  });
 }
+*/
 
-/* ----------------------------- API ----------------------------- */
-
-async function sendMail({ to, subject, html, text, headers, attachments } = {}) {
-  if (!to) throw new Error("sendMail: 'to' is required");
-  if (!subject) throw new Error("sendMail: 'subject' is required");
-
-  try {
-    const info = await transport.sendMail({
-      from: MAIL_FROM,
-      to,
-      subject,
-      html: html || (text ? `<pre style="white-space:pre-wrap;">${escapeHtml(text)}</pre>` : " "),
-      text: text || "",
-      headers,
-      attachments,
-    });
-
-    if (DEBUG_MAILER) {
-      console.log("[MAILER] Sent", {
-        id: info.messageId || info.response,
-        accepted: info.accepted,
-        rejected: info.rejected,
-      });
-    }
-
-    return { ok: true, id: info.messageId || info.response };
-  } catch (e) {
-    console.error("[MAILER] FAIL", e.message);
-    throw e;
-  }
-}
-
-function escapeHtml(s = "") {
-  return String(s)
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#039;");
-}
+/* ----------------------------- Branded Email Templates ----------------------------- */
 
 /**
  * Send a branded welcome email to newly signed up users.
@@ -230,18 +215,26 @@ function escapeHtml(s = "") {
 async function sendWelcomeEmail({ to, name, referralCode }) {
   if (!to) return;
   const SystemSettings = require("../models/SystemSettings");
-  
+
   let isAmbassadorEnabled = true;
   try {
-    isAmbassadorEnabled = await SystemSettings.getSetting("ambassador_module_enabled", true);
+    isAmbassadorEnabled = await SystemSettings.getSetting(
+      "ambassador_module_enabled",
+      true
+    );
   } catch (err) {
-    console.warn("[MAILER] SystemSettings check failed, defaulting enabled:", err.message);
+    console.warn(
+      "[MAILER] SystemSettings check failed, defaulting enabled:",
+      err.message
+    );
   }
 
   const safeName = escapeHtml(name || "Student");
   const safeCode = escapeHtml(referralCode || "");
 
-  const referralBlock = isAmbassadorEnabled && safeCode ? `
+  const referralBlock =
+    isAmbassadorEnabled && safeCode
+      ? `
     <div style="margin-top: 25px; padding: 18px; background-color: #fff8f8; border: 1.5px dashed #f81d1d; border-radius: 8px; text-align: center;">
       <p style="margin: 0 0 6px 0; font-size: 12px; font-weight: 700; color: #ec6408; text-transform: uppercase; letter-spacing: 1px;">
         Campus Ambassador Verification Code
@@ -253,7 +246,8 @@ async function sendWelcomeEmail({ to, name, referralCode }) {
         If a Campus Ambassador helped you get started on NutriPay, please share this unique verification code with them so they can verify your onboarding!
       </p>
     </div>
-  ` : "";
+  `
+      : "";
 
   const html = `
     <!DOCTYPE html>

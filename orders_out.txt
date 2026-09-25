@@ -1,0 +1,11 @@
+=== RECENT ORDERS ===
+Order ORD-1790309047303-2908 | Amount: KES 600 | PayMethod: wallet | Status: preparing | User: user4@gmail.com (Vanidiah) | Points: 22 | Date: Fri Sep 25 2026 07:04:07 GMT+0300 (East Africa Time)
+Order ORD-1790308170026-5233 | Amount: KES 150 | PayMethod: wallet | Status: preparing | User: user4@gmail.com (Vanidiah) | Points: 22 | Date: Fri Sep 25 2026 06:49:30 GMT+0300 (East Africa Time)
+Order ORD-1790307716097-6908 | Amount: KES 650 | PayMethod: wallet | Status: preparing | User: user4@gmail.com (Vanidiah) | Points: 22 | Date: Fri Sep 25 2026 06:41:56 GMT+0300 (East Africa Time)
+Order ORD-1790307633491-5576 | Amount: KES 500 | PayMethod: wallet | Status: preparing | User: user4@gmail.com (Vanidiah) | Points: 22 | Date: Fri Sep 25 2026 06:40:33 GMT+0300 (East Africa Time)
+Order ORD-1790306940926-3719 | Amount: KES 150 | PayMethod: wallet | Status: preparing | User: user4@gmail.com (Vanidiah) | Points: 22 | Date: Fri Sep 25 2026 06:29:00 GMT+0300 (East Africa Time)
+Order ORD-1790306583308-6328 | Amount: KES 550 | PayMethod: mpesa_direct | Status: failed | User: user4@gmail.com (Vanidiah) | Points: 22 | Date: Fri Sep 25 2026 06:23:03 GMT+0300 (East Africa Time)
+Order ORD-1790306478995-7345 | Amount: KES 550 | PayMethod: wallet | Status: preparing | User: user4@gmail.com (Vanidiah) | Points: 22 | Date: Fri Sep 25 2026 06:21:19 GMT+0300 (East Africa Time)
+Order ORD-1790305673472-6752 | Amount: KES 300 | PayMethod: wallet | Status: preparing | User: user4@gmail.com (Vanidiah) | Points: 22 | Date: Fri Sep 25 2026 06:07:53 GMT+0300 (East Africa Time)
+Order ORD-1790305269925-5739 | Amount: KES 150 | PayMethod: wallet | Status: preparing | User: user4@gmail.com (Vanidiah) | Points: 22 | Date: Fri Sep 25 2026 06:01:10 GMT+0300 (East Africa Time)
+Order ORD-1790300609091-5303 | Amount: KES 300 | PayMethod: wallet | Status: preparing | User: user4@gmail.com (Vanidiah) | Points: 22 | Date: Fri Sep 25 2026 04:43:29 GMT+0300 (East Africa Time)

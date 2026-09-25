@@ -1942,6 +1942,199 @@ const getMealOrderStats = async (req, res) => {
   }
 };
 
+// @desc    Get loyalty points overview & user balances summary for Admin
+// @route   GET /api/admin/loyalty/summary
+// @access  Private (Admin)
+const getAdminLoyaltySummary = async (req, res) => {
+  try {
+    const LoyaltyLog = require('../models/LoyaltyLog');
+    const AuditLog = require('../models/AuditLog');
+
+    const users = await User.find({
+      $or: [
+        { loyaltyPoints: { $gt: 0 } },
+        { totalLoyaltyPointsEarned: { $gt: 0 } },
+        { totalLoyaltyPointsConverted: { $gt: 0 } }
+      ]
+    }).select('name email phone role loyaltyPoints totalLoyaltyPointsEarned totalLoyaltyPointsConverted createdAt')
+      .sort({ loyaltyPoints: -1 })
+      .lean();
+
+    const totalActivePoints = users.reduce((acc, u) => acc + (u.loyaltyPoints || 0), 0);
+    const totalEarnedPoints = users.reduce((acc, u) => acc + (u.totalLoyaltyPointsEarned || 0), 0);
+    const totalConvertedPoints = users.reduce((acc, u) => acc + (u.totalLoyaltyPointsConverted || 0), 0);
+
+    const anomalyCount = await AuditLog.countDocuments({ action: 'loyalty_anomaly' });
+
+    res.json({
+      success: true,
+      stats: {
+        totalActivePoints,
+        totalEarnedPoints,
+        totalConvertedPoints,
+        userCountWithPoints: users.length,
+        anomalyCount
+      },
+      users
+    });
+  } catch (error) {
+    console.error("Get Admin Loyalty Summary Error:", error);
+    res.status(500).json({ message: "Failed to fetch admin loyalty summary: " + error.message });
+  }
+};
+
+// @desc    Get flagged loyalty anomalies log for Admin
+// @route   GET /api/admin/loyalty/anomalies
+// @access  Private (Admin)
+const getAdminLoyaltyAnomalies = async (req, res) => {
+  try {
+    const AuditLog = require('../models/AuditLog');
+    const anomalies = await AuditLog.find({ action: 'loyalty_anomaly' })
+      .populate('user', 'name email role phone')
+      .sort({ createdAt: -1 })
+      .lean();
+
+    res.json({
+      success: true,
+      count: anomalies.length,
+      anomalies
+    });
+  } catch (error) {
+    console.error("Get Admin Loyalty Anomalies Error:", error);
+    res.status(500).json({ message: "Failed to fetch loyalty anomalies: " + error.message });
+  }
+};
+
+// @desc    Get all donated meals for Admin Donations Tracking Page
+// @route   GET /api/admin/donations
+// @access  Private (Admin)
+const getAdminDonations = async (req, res) => {
+  try {
+    const Delivery = require('../models/Delivery');
+
+    const donations = await Delivery.find({
+      $or: [
+        { isDonated: true },
+        { status: 'donated' }
+      ]
+    }).populate('student', 'name email phone')
+      .populate('originalStudent', 'name email phone')
+      .populate({
+        path: 'vendor',
+        populate: { path: 'user', select: 'name email companyName' }
+      })
+      .populate('deliveryLocation')
+      .sort({ createdAt: -1 })
+      .lean();
+
+    const totalDonated = donations.length;
+    const unclaimedCount = donations.filter(d => d.status === 'donated').length;
+    const claimedCount = donations.filter(d => d.status !== 'donated' && d.claimedAt).length;
+
+    res.json({
+      success: true,
+      stats: {
+        totalDonated,
+        unclaimedCount,
+        claimedCount
+      },
+      donations
+    });
+  } catch (error) {
+    console.error("Get Admin Donations Error:", error);
+    res.status(500).json({ message: "Failed to fetch admin donations: " + error.message });
+  }
+};
+
+// @desc    Manually assign an unclaimed donated meal to a student
+// @route   POST /api/admin/donations/assign
+// @access  Private (Admin)
+const assignDonationToStudent = async (req, res) => {
+  const { deliveryId, studentId } = req.body;
+  if (!deliveryId || !studentId) {
+    return res.status(400).json({ message: "Both deliveryId and studentId are required." });
+  }
+
+  try {
+    const Delivery = require('../models/Delivery');
+    const Student = require('../models/Student');
+    const Notification = require('../models/Notification');
+
+    const studentUser = await User.findById(studentId);
+    if (!studentUser) {
+      return res.status(404).json({ message: "Target student user not found." });
+    }
+
+    const delivery = await Delivery.findById(deliveryId);
+    if (!delivery) {
+      return res.status(404).json({ message: "Donated delivery record not found." });
+    }
+
+    if (delivery.originalStudent && delivery.originalStudent.toString() === studentId) {
+      return res.status(400).json({ message: "Cannot assign meal to the original student who donated it." });
+    }
+
+    // Update delivery record
+    delivery.student = studentId;
+    delivery.status = 'pending';
+    delivery.claimedAt = new Date();
+
+    // Set delivery location to student's profile location
+    const studentProfile = await Student.findOne({ user: studentId }).populate('deliveryLocation');
+    if (studentProfile && studentProfile.deliveryLocation) {
+      delivery.location = studentProfile.deliveryLocation.name || studentProfile.hostel || 'Campus';
+      delivery.deliveryLocation = studentProfile.deliveryLocation._id;
+    }
+
+    await delivery.save();
+
+    // Create Notification for the beneficiary student
+    await Notification.create({
+      user: studentId,
+      type: 'activity',
+      title: 'Donated Meal Assigned!',
+      message: `An administrator has assigned a donated meal (${delivery.items?.[0]?.name || 'Meal'}) to you! It is scheduled for delivery.`
+    });
+
+    res.json({
+      success: true,
+      message: `Successfully assigned donated meal to student ${studentUser.name}!`,
+      delivery
+    });
+  } catch (error) {
+    console.error("Assign Donation Error:", error);
+    res.status(500).json({ message: "Failed to assign donation: " + error.message });
+  }
+};
+
+// @desc    Mark a donated meal as claimed/fulfilled
+// @route   POST /api/admin/donations/mark-claimed
+// @access  Private (Admin)
+const markDonationClaimed = async (req, res) => {
+  const { deliveryId } = req.body;
+  if (!deliveryId) return res.status(400).json({ message: "deliveryId is required." });
+
+  try {
+    const Delivery = require('../models/Delivery');
+    const delivery = await Delivery.findByIdAndUpdate(
+      deliveryId,
+      { $set: { claimedAt: new Date() } },
+      { new: true }
+    );
+
+    if (!delivery) return res.status(404).json({ message: "Donated delivery record not found." });
+
+    res.json({
+      success: true,
+      message: "Donated meal marked as claimed.",
+      delivery
+    });
+  } catch (error) {
+    console.error("Mark Donation Claimed Error:", error);
+    res.status(500).json({ message: "Failed to mark donation as claimed: " + error.message });
+  }
+};
+
 module.exports = {
   getDashboard,
   getUsers,
@@ -1978,5 +2171,10 @@ module.exports = {
   getErrorLogs,
   resolveErrorLog,
   updateWalletStatus,
-  getMealOrderStats
+  getMealOrderStats,
+  getAdminLoyaltySummary,
+  getAdminLoyaltyAnomalies,
+  getAdminDonations,
+  assignDonationToStudent,
+  markDonationClaimed
 };

@@ -206,6 +206,19 @@ const optOut = async (req, res) => {
       status: 'pending_admin_approval'
     });
 
+    // Revert Loyalty Points earned for the cancelled order / subscription / pending deliveries
+    try {
+      const loyaltyService = require('../services/loyaltyService');
+      await loyaltyService.revertPoints({
+        userId: studentId,
+        orderId: subscription ? subscription._id : null,
+        orderAmountKES: totalRefundKes,
+        reason: `Opted out of ${pendingDeliveryIds.length} pending delivery(ies) / subscription. Reverted earned points.`
+      });
+    } catch (loyaltyErr) {
+      console.warn("[OptOut] Loyalty points reversion error (ignored):", loyaltyErr.message);
+    }
+
     res.json({
       message: `Opt-out request submitted. Your refund request of KES ${totalRefundKes} is pending admin approval.`,
       refundRequest
@@ -331,6 +344,18 @@ const cancelDeliveries = async (req, res) => {
     // Execute refund for cancelled deliveries
     const deliveryIdsToCancel = deliveries.map(d => d._id);
     const refundResult = await escrowService.calculateRefund(deliveryIdsToCancel, studentId);
+
+    // Revert Loyalty Points earned for cancelled deliveries
+    try {
+      const loyaltyService = require('../services/loyaltyService');
+      await loyaltyService.revertPoints({
+        userId: studentId,
+        orderAmountKES: refundResult.refundedKES || 0,
+        reason: `Cancelled ${deliveries.length} scheduled delivery(ies) (Refunded KES ${refundResult.refundedKES || 0}).`
+      });
+    } catch (loyaltyErr) {
+      console.warn("[cancelDeliveries] Loyalty points reversion error (ignored):", loyaltyErr.message);
+    }
 
     await studentProfile.save();
 
