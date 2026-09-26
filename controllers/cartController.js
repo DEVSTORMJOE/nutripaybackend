@@ -711,15 +711,22 @@ async function addSponsorCheckout(req, res) {
       </div>
     `;
 
+    let emailSent = false;
+    let mailChannel = null;
+    let mailErrorMsg = null;
+
     try {
-      await sendMail({
+      const sendRes = await sendMail({
         to: sponsorEmail,
         subject: "NutriPay - Secure Student Meal Request",
         html: emailHtml,
       });
-      console.log(`[EMAIL SENT] To: ${sponsorEmail}`);
+      emailSent = true;
+      mailChannel = sendRes?.channel || "email";
+      console.log(`[EMAIL SENT] To: ${sponsorEmail} via ${mailChannel}`);
     } catch (mailErr) {
-      console.error("Failed to send mail, proceeding anyway:", mailErr);
+      mailErrorMsg = mailErr.message || "Failed to send email notification";
+      console.error("Failed to send sponsor request mail:", mailErr);
     }
 
     // Emitting the awaiting_sponsor deliveries for the Sponsor
@@ -972,7 +979,12 @@ async function addSponsorCheckout(req, res) {
 
     return res.json({ 
       ok: true, 
-      message: `Request sent to ${sponsorName}. They have been emailed instructions.` 
+      emailSent,
+      message: emailSent
+        ? `Request sent to ${sponsorName}. They have been emailed instructions.`
+        : `Request saved for ${sponsorName}, but email notification could not be delivered. Please share the payment link with them directly.`,
+      paymentLink: emailSent ? undefined : paymentLink,
+      emailError: emailSent ? undefined : mailErrorMsg
     });
   } catch (err) {
     console.error("Add Sponsor Checkout failed:", err);
@@ -1234,15 +1246,22 @@ async function customPlanSponsorCheckout(req, res) {
       </div>
     `;
 
+    let emailSent = false;
+    let mailChannel = null;
+    let mailErrorMsg = null;
+
     try {
-      await sendMail({
+      const sendRes = await sendMail({
         to: sponsorEmail,
         subject: "NutriPay - Secure Student Custom Meal Request",
         html: emailHtml,
       });
-      console.log(`[EMAIL SENT] To: ${sponsorEmail}`);
+      emailSent = true;
+      mailChannel = sendRes?.channel || "email";
+      console.log(`[EMAIL SENT] To: ${sponsorEmail} via ${mailChannel}`);
     } catch (mailErr) {
-      console.error("Failed to send mail, proceeding anyway:", mailErr);
+      mailErrorMsg = mailErr.message || "Failed to send email notification";
+      console.error("Failed to send custom plan sponsor mail:", mailErr);
     }
 
     // Schedule deliveries with status 'awaiting_sponsor'
@@ -1387,7 +1406,12 @@ async function customPlanSponsorCheckout(req, res) {
 
     return res.json({ 
       ok: true, 
-      message: `Request sent to ${sponsorName}. They have been emailed instructions.` 
+      emailSent,
+      message: emailSent
+        ? `Request sent to ${sponsorName}. They have been emailed instructions.`
+        : `Request saved for ${sponsorName}, but email notification could not be delivered. Please share the payment link with them directly.`,
+      paymentLink: emailSent ? undefined : paymentLink,
+      emailError: emailSent ? undefined : mailErrorMsg
     });
   } catch (err) {
     console.error("Custom plan sponsor checkout failed:", err);

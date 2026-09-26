@@ -238,6 +238,18 @@ const mpesaCallback = async (req, res) => {
                     await studentProfile.save(session ? { session } : {});
                 }
 
+                // Award Loyalty Points to Student for Sponsor-funded Subscription (1 pt per 100 KES, capped at 5)
+                try {
+                    const loyaltyService = require('../services/loyaltyService');
+                    await loyaltyService.awardPoints({
+                        userId: sponsorRequest.student,
+                        orderId: activeSubscription._id,
+                        orderAmountKES: amountPaid
+                    });
+                } catch (loyaltyErr) {
+                    console.warn("[mpesaCallback] Sponsor payment loyalty points award error (ignored):", loyaltyErr.message);
+                }
+
                 // Mark request as paid
                 sponsorRequest.status = 'paid';
                 await sponsorRequest.save(session ? { session } : {});

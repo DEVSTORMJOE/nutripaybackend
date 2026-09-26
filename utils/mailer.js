@@ -1,9 +1,9 @@
 // server/utils/mailer.js
-// Modern Brevo Native API Integration (@getbrevo/brevo SDK)
-// Preserving legacy Nodemailer + Google App Password configuration below in comments.
+// Dual Brevo Native API & Nodemailer SMTP Engine with Automatic Fallback
 
 require("dotenv").config();
 const { BrevoClient } = require("@getbrevo/brevo");
+const nodemailer = require("nodemailer");
 
 /* ----------------------------- Helpers ----------------------------- */
 
@@ -85,10 +85,16 @@ const MAIL_FROM =
     ? `NutriPay <${env("SMTP_USER")}>`
     : "NutriPay <no-reply@nutripay.com>");
 
+// Determine if key is a Brevo SMTP key (xsmtpsib-...) vs Brevo API Key (xkeysib-...)
+const IS_BREVO_SMTP_KEY = BREVO_API_KEY.startsWith("xsmtpsib-");
+const IS_BREVO_V3_KEY = BREVO_API_KEY.startsWith("xkeysib-");
+
 if (DEBUG_MAILER) {
-  console.log("[MAILER] Brevo SDK Boot", {
+  console.log("[MAILER] Engine Initialized", {
     NODE_ENV,
     HAS_BREVO_KEY: !!BREVO_API_KEY,
+    IS_BREVO_SMTP_KEY,
+    IS_BREVO_V3_KEY,
     MAIL_FROM,
   });
 }
@@ -97,114 +103,167 @@ if (DEBUG_MAILER) {
 let brevoClientInstance = null;
 
 function getBrevoClient() {
-  if (!brevoClientInstance) {
-    if (!BREVO_API_KEY) {
-      console.warn(
-        "[MAILER] BREVO_API_KEY missing in .env. Set BREVO_API_KEY to send emails via Brevo API."
-      );
-    }
+  if (!brevoClientInstance && BREVO_API_KEY) {
     brevoClientInstance = new BrevoClient({
-      apiKey: BREVO_API_KEY || "missing-api-key",
+      apiKey: BREVO_API_KEY,
     });
   }
   return brevoClientInstance;
 }
 
-/* ----------------------------- Brevo API Engine ----------------------------- */
+// Lazy/Cached Nodemailer Transports
+let brevoSmtpTransport = null;
+let gmailSmtpTransport = null;
+
+function getBrevoSmtpTransport() {
+  if (!brevoSmtpTransport) {
+    const smtpPass = BREVO_API_KEY;
+    const sender = parseSender(MAIL_FROM);
+    const smtpUser = env("BREVO_USER") || env("SMTP_USER") || env("GMAIL_USER") || "mainafrank400@gmail.com";
+
+    brevoSmtpTransport = nodemailer.createTransport({
+      host: "smtp-relay.brevo.com",
+      port: 587,
+      secure: false, // TLS via STARTTLS
+      auth: {
+        user: smtpUser,
+        pass: smtpPass,
+      },
+      tls: {
+        rejectUnauthorized: false,
+      },
+    });
+  }
+  return brevoSmtpTransport;
+}
+
+function getGmailSmtpTransport() {
+  if (!gmailSmtpTransport) {
+    const gmailUser = env("GMAIL_USER") || env("SMTP_USER");
+    const gmailPass = (env("GMAIL_APP_PASSWORD") || env("SMTP_PASS") || "").trim().replace(/\s+/g, "");
+
+    if (!gmailUser || !gmailPass) {
+      return null;
+    }
+
+    gmailSmtpTransport = nodemailer.createTransport({
+      host: env("SMTP_HOST", "smtp.gmail.com"),
+      port: Number(env("SMTP_PORT", "465")),
+      secure: true,
+      auth: {
+        user: gmailUser,
+        pass: gmailPass,
+      },
+      tls: {
+        rejectUnauthorized: false,
+      },
+    });
+  }
+  return gmailSmtpTransport;
+}
+
+/* ----------------------------- Smart Mail Engine ----------------------------- */
 
 /**
- * Send transactional email using the modern Brevo SDK (`@getbrevo/brevo`)
+ * Send transactional email with smart multi-tier fallback:
+ * 1. Brevo REST API v3 (if key is xkeysib-...)
+ * 2. Brevo SMTP Relay (if key is xsmtpsib-...)
+ * 3. Gmail / Legacy Nodemailer SMTP Fallback
  */
 async function sendMail({ to, subject, html, text, headers, attachments } = {}) {
   if (!to) throw new Error("sendMail: 'to' is required");
   if (!subject) throw new Error("sendMail: 'subject' is required");
 
-  try {
-    const client = getBrevoClient();
-    const sender = parseSender(MAIL_FROM);
-    const recipients = parseRecipients(to);
+  let lastError = null;
 
-    const payload = {
-      sender,
-      to: recipients,
-      subject,
-      htmlContent:
-        html || (text ? `<pre style="white-space:pre-wrap;">${escapeHtml(text)}</pre>` : " "),
-      textContent: text || "",
-    };
+  // 1. Try Brevo v3 REST API (if key is xkeysib- or type unknown/generic)
+  if (BREVO_API_KEY && !IS_BREVO_SMTP_KEY) {
+    try {
+      const client = getBrevoClient();
+      const sender = parseSender(MAIL_FROM);
+      const recipients = parseRecipients(to);
 
-    if (headers) payload.headers = headers;
-    if (attachments && Array.isArray(attachments) && attachments.length > 0) {
-      payload.attachment = attachments;
+      const payload = {
+        sender,
+        to: recipients,
+        subject,
+        htmlContent:
+          html || (text ? `<pre style="white-space:pre-wrap;">${escapeHtml(text)}</pre>` : " "),
+        textContent: text || "",
+      };
+
+      if (headers) payload.headers = headers;
+      if (attachments && Array.isArray(attachments) && attachments.length > 0) {
+        payload.attachment = attachments;
+      }
+
+      const result = await client.transactionalEmails.sendTransacEmail(payload);
+
+      if (DEBUG_MAILER) {
+        console.log("[MAILER] Sent via Brevo API v3", {
+          messageId: result.messageId || result.messageIds,
+        });
+      }
+
+      return { ok: true, channel: "brevo_api", id: result.messageId || result.messageIds || "sent" };
+    } catch (e) {
+      lastError = e;
+      console.warn("[MAILER] Brevo API v3 dispatch failed (trying Brevo/Gmail SMTP fallback):", e.message || e);
     }
-
-    const result = await client.transactionalEmails.sendTransacEmail(payload);
-
-    if (DEBUG_MAILER) {
-      console.log("[MAILER] Sent via Brevo API", {
-        messageId: result.messageId || result.messageIds,
-      });
-    }
-
-    return { ok: true, id: result.messageId || result.messageIds || "sent" };
-  } catch (e) {
-    console.error("[MAILER] Brevo API send failed:", e.message || e);
-    throw e;
   }
+
+  // 2. Try Brevo SMTP Relay (works with xsmtpsib- keys or when API failed)
+  if (BREVO_API_KEY) {
+    try {
+      const transport = getBrevoSmtpTransport();
+      const mailOptions = {
+        from: MAIL_FROM,
+        to: Array.isArray(to) ? to.join(",") : to,
+        subject,
+        html,
+        text,
+        headers,
+        attachments,
+      };
+
+      const info = await transport.sendMail(mailOptions);
+      if (DEBUG_MAILER) {
+        console.log("[MAILER] Sent via Brevo SMTP Relay", { messageId: info.messageId });
+      }
+      return { ok: true, channel: "brevo_smtp", id: info.messageId };
+    } catch (e) {
+      lastError = e;
+      console.warn("[MAILER] Brevo SMTP Relay dispatch failed (trying Gmail SMTP fallback):", e.message || e);
+    }
+  }
+
+  // 3. Fallback: Gmail / Nodemailer SMTP
+  try {
+    const gmailTransport = getGmailSmtpTransport();
+    if (gmailTransport) {
+      const mailOptions = {
+        from: MAIL_FROM,
+        to: Array.isArray(to) ? to.join(",") : to,
+        subject,
+        html,
+        text,
+        headers,
+        attachments,
+      };
+
+      const info = await gmailTransport.sendMail(mailOptions);
+      if (DEBUG_MAILER) {
+        console.log("[MAILER] Sent via Gmail SMTP Fallback", { messageId: info.messageId });
+      }
+      return { ok: true, channel: "gmail_smtp", id: info.messageId };
+    }
+  } catch (e) {
+    lastError = e;
+    console.error("[MAILER] Gmail SMTP fallback failed:", e.message || e);
+  }
+
+  throw new Error(`All email dispatch channels failed. Last error: ${lastError ? lastError.message : "Unknown error"}`);
 }
-
-/* ----------------------------- Legacy Nodemailer Setup (Commented Out) ----------------------------- */
-/*
-const nodemailer = require("nodemailer");
-
-function numEnv(name, fallback) {
-  const v = env(name);
-  const n = Number(v);
-  return Number.isFinite(n) && n > 0 ? n : fallback;
-}
-
-function normalizeGmailAppPassword(pw) {
-  return String(pw || "").trim().replace(/\s+/g, "");
-}
-
-const SMTP_HOST =
-  env("SMTP_HOST") || (env("GMAIL_USER") ? "smtp.gmail.com" : "");
-const SMTP_PORT = numEnv("SMTP_PORT", SMTP_HOST === "smtp.gmail.com" ? 465 : 587);
-const SMTP_USER = env("SMTP_USER") || env("GMAIL_USER");
-const SMTP_PASS = env("SMTP_PASS") || normalizeGmailAppPassword(env("GMAIL_APP_PASSWORD"));
-
-const SMTP_SECURE =
-  env("SMTP_SECURE")
-    ? boolEnv("SMTP_SECURE", false)
-    : SMTP_HOST === "smtp.gmail.com"
-    ? true
-    : SMTP_PORT === 465;
-
-const TLS_REJECT_UNAUTHORIZED = boolEnv("SMTP_TLS_REJECT_UNAUTHORIZED", IS_PROD);
-
-const transport = nodemailer.createTransport({
-  host: SMTP_HOST,
-  port: SMTP_PORT,
-  secure: SMTP_SECURE,
-  auth: { user: SMTP_USER, pass: SMTP_PASS },
-  tls: {
-    minVersion: "TLSv1.2",
-    rejectUnauthorized: TLS_REJECT_UNAUTHORIZED,
-  },
-});
-
-async function legacySendMail({ to, subject, html, text, headers, attachments } = {}) {
-  return transport.sendMail({
-    from: MAIL_FROM,
-    to,
-    subject,
-    html,
-    text,
-    headers,
-    attachments,
-  });
-}
-*/
 
 /* ----------------------------- Branded Email Templates ----------------------------- */
 
