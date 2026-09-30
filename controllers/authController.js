@@ -1156,6 +1156,139 @@ async function logout(req, res) {
   }
 }
 
+/**
+ * Request a 6-Digit Password Reset OTP via Email
+ */
+async function forgotPassword(req, res) {
+  try {
+    const { email } = req.body || {};
+    const cleanEmail = String(email || "").trim().toLowerCase();
+
+    if (!cleanEmail || !isValidEmail(cleanEmail)) {
+      return res.status(400).json({ message: "Please provide a valid email address." });
+    }
+
+    const genericSuccessMsg = "If an account with that email exists, a 6-digit verification code has been sent.";
+
+    const user = await User.findOne({ email: cleanEmail });
+    if (!user) {
+      // Prevent email enumeration
+      return res.json({ success: true, message: genericSuccessMsg });
+    }
+
+    // Generate secure 6-digit OTP
+    const otp = String(crypto.randomInt(100000, 999999));
+    const otpHash = crypto.createHash("sha256").update(otp).digest("hex");
+    const otpExpires = new Date(Date.now() + 15 * 60 * 1000); // 15 minutes
+
+    user.resetPasswordOtpHash = otpHash;
+    user.resetPasswordOtpExpires = otpExpires;
+    user.resetPasswordOtpAttempts = 0;
+    await user.save();
+
+    console.log(`[AUTH] Password Reset OTP generated for ${cleanEmail}: ${otp}`);
+
+    // Asynchronously dispatch email without blocking the HTTP response
+    const { sendPasswordResetOtpEmail } = require("../utils/mailer");
+    sendPasswordResetOtpEmail({
+      to: user.email,
+      name: user.name || "User",
+      otp,
+    })
+      .then(() => {
+        console.log(`[AUTH] Password reset OTP email successfully sent to ${user.email}`);
+      })
+      .catch((mailErr) => {
+        console.error("[AUTH] Failed to send password reset OTP email:", mailErr.message || mailErr);
+      });
+
+    return res.json({
+      success: true,
+      message: genericSuccessMsg,
+    });
+  } catch (err) {
+    console.error("FORGOT_PASSWORD_ERROR:", err);
+    return res.status(500).json({ message: "Failed to request password reset code." });
+  }
+}
+
+/**
+ * Reset Password using 6-Digit OTP Code
+ */
+async function resetPassword(req, res) {
+  try {
+    const { email, otp, newPassword } = req.body || {};
+    const cleanEmail = String(email || "").trim().toLowerCase();
+    const cleanOtp = String(otp || "").trim();
+
+    if (!cleanEmail || !cleanOtp || !newPassword) {
+      return res.status(400).json({ message: "Email, 6-digit verification code, and new password are required." });
+    }
+
+    if (String(newPassword).length < 6) {
+      return res.status(400).json({ message: "New password must be at least 6 characters." });
+    }
+
+    const user = await User.findOne({ email: cleanEmail }).select("+resetPasswordOtpHash +password");
+    if (!user || !user.resetPasswordOtpHash || !user.resetPasswordOtpExpires) {
+      return res.status(400).json({ message: "Invalid or expired password reset request." });
+    }
+
+    // Check expiration
+    if (new Date() > user.resetPasswordOtpExpires) {
+      user.resetPasswordOtpHash = null;
+      user.resetPasswordOtpExpires = null;
+      user.resetPasswordOtpAttempts = 0;
+      await user.save();
+      return res.status(400).json({ message: "Verification code has expired. Please request a new one." });
+    }
+
+    // Check attempt lockout
+    if ((user.resetPasswordOtpAttempts || 0) >= 5) {
+      user.resetPasswordOtpHash = null;
+      user.resetPasswordOtpExpires = null;
+      user.resetPasswordOtpAttempts = 0;
+      await user.save();
+      return res.status(400).json({ message: "Too many failed attempts. Verification code invalidated. Please request a new one." });
+    }
+
+    // Verify OTP hash securely
+    const inputOtpHash = crypto.createHash("sha256").update(cleanOtp).digest("hex");
+    const match = crypto.timingSafeEqual(
+      Buffer.from(inputOtpHash, "hex"),
+      Buffer.from(user.resetPasswordOtpHash, "hex")
+    );
+
+    if (!match) {
+      user.resetPasswordOtpAttempts = (user.resetPasswordOtpAttempts || 0) + 1;
+      await user.save();
+      const remaining = 5 - user.resetPasswordOtpAttempts;
+      return res.status(400).json({
+        message: `Invalid verification code. ${remaining > 0 ? `${remaining} attempt(s) remaining.` : "Code invalidated."}`
+      });
+    }
+
+    // Valid OTP - Update password & clear OTP fields
+    user.password = newPassword;
+    user.resetPasswordOtpHash = null;
+    user.resetPasswordOtpExpires = null;
+    user.resetPasswordOtpAttempts = 0;
+    user.requiresPasswordChange = false;
+    await user.save();
+
+    // Revoke all existing sessions for security
+    await RefreshToken.deleteMany({ user: user._id });
+
+    return res.json({
+      success: true,
+      message: "Password updated successfully! You can now log in with your new password.",
+    });
+  } catch (err) {
+    console.error("RESET_PASSWORD_ERROR:", err);
+    return res.status(500).json({ message: "Failed to reset password." });
+  }
+}
+
 module.exports = {
   register,
   login,
@@ -1166,5 +1299,7 @@ module.exports = {
   sendSponsorOTP,
   verifySponsorOTP,
   refresh,
-  logout
+  logout,
+  forgotPassword,
+  resetPassword,
 };

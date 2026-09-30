@@ -84,6 +84,19 @@ const userSchema = new mongoose.Schema(
       type: Date,
       default: null,
     },
+    resetPasswordOtpHash: {
+      type: String,
+      select: false,
+      default: null,
+    },
+    resetPasswordOtpExpires: {
+      type: Date,
+      default: null,
+    },
+    resetPasswordOtpAttempts: {
+      type: Number,
+      default: 0,
+    },
     referralCode: {
       type: String,
       unique: true,
