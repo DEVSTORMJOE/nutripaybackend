@@ -653,7 +653,7 @@ async function addSponsorCheckout(req, res) {
 
     // Generate secure sponsorship token
     const token = crypto.randomBytes(32).toString("hex");
-    const frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000";
+    const frontendUrl = process.env.FRONTEND_URL || process.env.PUBLIC_FRONTEND_URL || "https://nutripay.co.ke";
     const paymentLink = `${frontendUrl}/sponsor-pay?token=${token}`;
 
     let emailHtml = `
@@ -1188,7 +1188,7 @@ async function customPlanSponsorCheckout(req, res) {
 
     // Generate secure sponsorship token
     const token = crypto.randomBytes(32).toString("hex");
-    const frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000";
+    const frontendUrl = process.env.FRONTEND_URL || process.env.PUBLIC_FRONTEND_URL || "https://nutripay.co.ke";
     const paymentLink = `${frontendUrl}/sponsor-pay?token=${token}`;
 
     let emailHtml = `
