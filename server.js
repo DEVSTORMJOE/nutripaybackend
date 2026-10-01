@@ -185,6 +185,7 @@ app.use("/api/admin/audit", require("./routes/auditRoutes"));
 app.use("/api/admin/health", require("./routes/healthRoutes"));
 app.use("/api/ambassadors", require("./routes/ambassadorRoutes"));
 app.use("/api/loyalty", require("./routes/loyaltyRoutes"));
+app.use("/api/last-dance", require("./modules/last-dance/routes/lastDanceRoutes"));
 /* =========================
    BASIC ROUTE
    ========================= */
