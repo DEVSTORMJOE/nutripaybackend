@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { getDashboard, approveMeal, getUsers, getPendingApprovals, approveVendor, getVendors, getWallets, updateWalletStatus, getTransactions, createUser, updateUser, createVendor, getMeals, updateMealApproval, getOrders, updateDishStatus, bulkUpdateDishStatus, assignDriverToOrder, overrideDeliveryOrder, getDeliveryStaff, approveDelivery, getWeeklyPlans, updateWeeklyPlan, resetWeeklyPlan, getWithdrawalRequests, handleWithdrawalRequest, assignLocationsToDriver, getRefundRequests, handleRefundApproval, getErrorLogs, resolveErrorLog, getMealOrderStats, getAdminLoyaltySummary, getAdminLoyaltyAnomalies, getAdminDonations, assignDonationToStudent, markDonationClaimed } = require('../controllers/adminController');
+const { getDashboard, approveMeal, getUsers, getPendingApprovals, approveVendor, getVendors, getWallets, updateWalletStatus, getTransactions, createUser, updateUser, createVendor, getMeals, updateMealApproval, getOrders, updateDishStatus, bulkUpdateDishStatus, assignDriverToOrder, overrideDeliveryOrder, reassignVendorToOrder, getDeliveryStaff, approveDelivery, getWeeklyPlans, updateWeeklyPlan, resetWeeklyPlan, getWithdrawalRequests, handleWithdrawalRequest, assignLocationsToDriver, getRefundRequests, handleRefundApproval, getErrorLogs, resolveErrorLog, getMealOrderStats, getAdminLoyaltySummary, getAdminLoyaltyAnomalies, getAdminDonations, assignDonationToStudent, markDonationClaimed } = require('../controllers/adminController');
 const { protect } = require('../middleware/authMiddleware');
 const { role } = require('../middleware/roleMiddleware');
 
@@ -24,6 +24,7 @@ router.put('/orders/bulk-dish-status', protect, role('admin'), bulkUpdateDishSta
 router.put('/orders/:id/dish-status', protect, role('admin'), updateDishStatus);
 router.post('/orders/:id/assign-driver', protect, role('admin'), assignDriverToOrder);
 router.post('/orders/:id/override-delivery', protect, role('admin'), overrideDeliveryOrder);
+router.post('/orders/:id/reassign-vendor', protect, role('admin'), reassignVendorToOrder);
 router.get('/delivery-staff', protect, role('admin'), getDeliveryStaff);
 router.post('/approve/delivery', protect, role('admin'), approveDelivery);
 router.get('/weekly-plans', protect, role('admin'), getWeeklyPlans);

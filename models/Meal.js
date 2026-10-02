@@ -25,6 +25,7 @@ const MealSchema = new mongoose.Schema(
     description: { type: String, default: "" },
     imageUrl: { type: String, default: "" },
     price: { type: mongoose.Schema.Types.Decimal128, required: true, min: 0 },
+    buyingPrice: { type: mongoose.Schema.Types.Decimal128, default: 0 },
     currency: { type: String, default: "KES" },
     priority: { type: Number, default: 0 },
     tier: { type: String, enum: ["normal", "premium"], default: "normal" },

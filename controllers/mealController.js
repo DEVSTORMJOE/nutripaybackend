@@ -135,6 +135,7 @@ async function createMeal(req, res) {
     const description = String(req.body.description || "").trim();
     const imageUrl = String(req.body.imageUrl || "").trim();
     const price = Number(req.body.price);
+    const buyingPrice = Number.isFinite(Number(req.body.buyingPrice)) ? Number(req.body.buyingPrice) : 0;
     const currency = String(req.body.currency || "KES").trim() || "KES";
     const priority = Number.isFinite(Number(req.body.priority)) ? Number(req.body.priority) : 0;
     const tier = ["normal", "premium"].includes(String(req.body.tier || "").toLowerCase())
@@ -156,6 +157,7 @@ async function createMeal(req, res) {
       description,
       imageUrl,
       price,
+      buyingPrice,
       currency,
       priority,
       tier,
@@ -196,6 +198,11 @@ async function updateMeal(req, res) {
       const price = Number(req.body.price);
       if (!Number.isFinite(price) || price < 0) return res.status(400).json({ message: "Invalid price" });
       patch.price = price;
+    }
+
+    if (req.body.buyingPrice !== undefined) {
+      const bp = Number(req.body.buyingPrice);
+      if (Number.isFinite(bp) && bp >= 0) patch.buyingPrice = bp;
     }
 
     if (req.body.currency !== undefined) patch.currency = String(req.body.currency || "KES").trim() || "KES";

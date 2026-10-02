@@ -112,13 +112,68 @@ async function releaseDailyVendorPayment(deliveryId, session = null) {
     : await Vendor.findById(delivery.vendor);
   if (!vendorProfile) throw new Error("Vendor profile not found");
 
-  // Calculate split based on dynamic vendor commission settings
+  // Calculate split based on dynamic vendor commission settings & per-product buying price overrides
   const vendorCommission = vendorProfile.vendorCommissionPercent !== undefined ? vendorProfile.vendorCommissionPercent : 90;
   const platformCommission = vendorProfile.platformCommissionPercent !== undefined ? vendorProfile.platformCommissionPercent : 10;
   const commissionRate = platformCommission / 100;
 
-  const commission = Number((totalCost * commissionRate).toFixed(2));
-  const vendorShare = Number((totalCost - commission).toFixed(2));
+  let vendorShare = 0;
+  let commission = 0;
+  let customOverrideApplied = false;
+
+  if (delivery.items && delivery.items.length > 0) {
+    try {
+      const Meal = require('../models/Meal');
+      const itemNames = delivery.items.map(i => i.name).filter(Boolean);
+      // Fetch meals matching item names across vendors so reassigned orders preserve buying price overrides
+      const meals = await Meal.find({ name: { $in: itemNames } });
+      const mealMap = new Map();
+      meals.forEach(m => {
+        const existing = mealMap.get(m.name);
+        const mBuyingPrice = m.buyingPrice ? parseFloat(m.buyingPrice.toString()) : 0;
+        const isCurrentVendor = String(m.vendor) === String(delivery.vendor);
+        if (!existing) {
+          mealMap.set(m.name, m);
+        } else if (mBuyingPrice > 0 && (!existing.buyingPrice || parseFloat(existing.buyingPrice.toString()) <= 0)) {
+          mealMap.set(m.name, m);
+        } else if (isCurrentVendor && mBuyingPrice > 0) {
+          mealMap.set(m.name, m);
+        }
+      });
+
+      let calcVendor = 0;
+      let hasCustomPrice = false;
+
+      delivery.items.forEach(item => {
+        const m = mealMap.get(item.name);
+        const qty = item.quantity || 1;
+        const mealSellingPrice = m && m.price ? parseFloat(m.price.toString()) : (totalCost / (delivery.items.length || 1));
+        const mealBuyingPrice = m && m.buyingPrice ? parseFloat(m.buyingPrice.toString()) : 0;
+
+        if (mealBuyingPrice > 0) {
+          hasCustomPrice = true;
+          calcVendor += mealBuyingPrice * qty;
+        } else {
+          const itemTotal = mealSellingPrice * qty;
+          calcVendor += itemTotal * (vendorCommission / 100);
+        }
+      });
+
+      if (hasCustomPrice) {
+        vendorShare = Number(calcVendor.toFixed(2));
+        commission = Number(Math.max(0, totalCost - vendorShare).toFixed(2));
+        customOverrideApplied = true;
+        console.log(`[Escrow Service] Per-product buying price override applied for delivery ${deliveryId}. Custom Vendor Share: ${vendorShare}, Commission: ${commission}`);
+      }
+    } catch (err) {
+      console.warn(`[Escrow Service] Error checking meal buying price override, falling back to percentage split:`, err.message);
+    }
+  }
+
+  if (!customOverrideApplied) {
+    commission = Number((totalCost * commissionRate).toFixed(2));
+    vendorShare = Number((totalCost - commission).toFixed(2));
+  }
 
   console.log(`[Escrow Service] Releasing daily payout for Delivery: ${deliveryId}. Cost: ${totalCost} KES. Vendor Share: ${vendorShare}, Commission: ${commission}`);
 

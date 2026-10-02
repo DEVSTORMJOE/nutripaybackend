@@ -2135,6 +2135,56 @@ const markDonationClaimed = async (req, res) => {
   }
 };
 
+// @desc    Reassign order to a different vendor (allowed while order is pending/preparing)
+// @route   POST /api/admin/orders/:id/reassign-vendor
+// @access  Private (Admin)
+const reassignVendorToOrder = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { vendorId } = req.body;
+
+    if (!vendorId) {
+      return res.status(400).json({ message: "vendorId is required" });
+    }
+
+    const delivery = await Delivery.findById(id);
+    if (!delivery) {
+      return res.status(404).json({ message: "Order not found" });
+    }
+
+    if (!["pending", "preparing", "ready"].includes(delivery.status)) {
+      return res.status(400).json({ message: `Cannot reassign vendor for order in ${delivery.status} status.` });
+    }
+
+    const newVendor = await Vendor.findById(vendorId);
+    if (!newVendor) {
+      return res.status(404).json({ message: "New vendor profile not found" });
+    }
+
+    delivery.vendor = newVendor._id;
+    await delivery.save();
+
+    const AuditLog = require('../models/AuditLog');
+    await AuditLog.create({
+      action: 'manual_adjustment',
+      user: req.user.id,
+      details: {
+        action: 'reassign_vendor_order',
+        orderId: delivery._id,
+        newVendorId: newVendor._id
+      }
+    });
+
+    res.json({
+      message: "Vendor reassigned successfully",
+      delivery
+    });
+  } catch (error) {
+    console.error("Reassign Vendor Error:", error);
+    res.status(500).json({ message: "Failed to reassign vendor: " + error.message });
+  }
+};
+
 module.exports = {
   getDashboard,
   getUsers,
@@ -2154,6 +2204,7 @@ module.exports = {
   bulkUpdateDishStatus,
   assignDriverToOrder,
   overrideDeliveryOrder,
+  reassignVendorToOrder,
   getDeliveryStaff,
   approveDelivery,
   getWeeklyPlans,
